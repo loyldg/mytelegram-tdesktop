@@ -398,11 +398,12 @@ public:
 	}
 	[[nodiscard]] QString getSoundPath(const QString &key) const;
 
-	[[nodiscard]] bool exeLaunchWarning() const {
-		return _exeLaunchWarning;
+	[[nodiscard]] auto noWarningExtensions() const
+	-> const base::flat_set<QString> & {
+		return _noWarningExtensions;
 	}
-	void setExeLaunchWarning(bool warning) {
-		_exeLaunchWarning = warning;
+	void setNoWarningExtensions(base::flat_set<QString> extensions) {
+		_noWarningExtensions = std::move(extensions);
 	}
 	[[nodiscard]] bool ipRevealWarning() const {
 		return _ipRevealWarning;
@@ -863,6 +864,13 @@ public:
 		_ttlVoiceClickTooltipHidden = value;
 	}
 
+	[[nodiscard]] const WindowPosition &ivPosition() const {
+		return _ivPosition;
+	}
+	void setIvPosition(const WindowPosition &position) {
+		_ivPosition = position;
+	}
+
 	[[nodiscard]] static bool ThirdColumnByDefault();
 	[[nodiscard]] static float64 DefaultDialogsWidthRatio();
 
@@ -926,7 +934,7 @@ private:
 	Ui::SendFilesWay _sendFilesWay = Ui::SendFilesWay();
 	Ui::InputSubmitSettings _sendSubmitWay = Ui::InputSubmitSettings();
 	base::flat_map<QString, QString> _soundOverrides;
-	bool _exeLaunchWarning = true;
+	base::flat_set<QString> _noWarningExtensions;
 	bool _ipRevealWarning = true;
 	bool _loopAnimatedStickers = true;
 	rpl::variable<bool> _largeEmoji = true;
@@ -977,8 +985,8 @@ private:
 #else // Q_OS_MAC
 	bool _hardwareAcceleratedVideo = false;
 #endif // Q_OS_MAC
-	HistoryView::DoubleClickQuickAction _chatQuickAction =
-		HistoryView::DoubleClickQuickAction();
+	HistoryView::DoubleClickQuickAction _chatQuickAction
+		= HistoryView::DoubleClickQuickAction();
 	bool _translateButtonEnabled = false;
 	rpl::variable<bool> _translateChatEnabled = true;
 	rpl::variable<int> _translateToRaw = 0;
@@ -990,6 +998,7 @@ private:
 	std::optional<uint64> _macRoundIconDigest;
 	rpl::variable<bool> _storiesClickTooltipHidden = false;
 	rpl::variable<bool> _ttlVoiceClickTooltipHidden = false;
+	WindowPosition _ivPosition;
 
 	bool _tabbedReplacedWithInfo = false; // per-window
 	rpl::event_stream<bool> _tabbedReplacedWithInfoValue; // per-window

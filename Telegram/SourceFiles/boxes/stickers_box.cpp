@@ -12,6 +12,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_channel.h"
 #include "data/data_file_origin.h"
 #include "data/data_document_media.h"
+#include "data/data_premium_limits.h"
 #include "data/stickers/data_stickers.h"
 #include "core/application.h"
 #include "lang/lang_keys.h"
@@ -40,8 +41,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/painter.h"
 #include "ui/unread_badge_paint.h"
 #include "media/clip/media_clip_reader.h"
-#include "main/main_account.h"
-#include "main/main_app_config.h"
 #include "main/main_session.h"
 #include "styles/style_layers.h"
 #include "styles/style_boxes.h"
@@ -179,7 +178,6 @@ private:
 		[[nodiscard]] bool isRecentSet() const;
 		[[nodiscard]] bool isMasksSet() const;
 		[[nodiscard]] bool isEmojiSet() const;
-		[[nodiscard]] bool isWebm() const;
 		[[nodiscard]] bool isInstalled() const;
 		[[nodiscard]] bool isUnread() const;
 		[[nodiscard]] bool isArchived() const;
@@ -654,8 +652,8 @@ void StickersBox::prepare() {
 		}
 		if (const auto featured = _featured.widget()) {
 			featured->setInstallSetCallback([=](uint64 setId) {
-				markAsInstalledCallback(setId);
 				installCallback(setId);
+				markAsInstalledCallback(setId);
 			});
 			featured->setRemoveSetCallback(markAsRemovedCallback);
 		}
@@ -1175,10 +1173,6 @@ bool StickersBox::Inner::Row::isEmojiSet() const {
 	return (set->type() == Data::StickersType::Emoji);
 }
 
-bool StickersBox::Inner::Row::isWebm() const {
-	return (set->flags & SetFlag::Webm);
-}
-
 bool StickersBox::Inner::Row::isInstalled() const {
 	return (flagsOverride & SetFlag::Installed);
 }
@@ -1540,7 +1534,7 @@ void StickersBox::Inner::paintRowThumbnail(
 	const auto y = _st.photoPosition.y() + (_st.photoSize - row->pixh) / 2;
 	if (row->lottie && row->lottie->ready()) {
 		const auto frame = row->lottie->frame();
-		const auto size = frame.size() / cIntRetinaFactor();
+		const auto size = frame.size() / style::DevicePixelRatio();
 		p.drawImage(
 			QRect(
 				left + (_st.photoSize - size.width()) / 2,
@@ -1570,7 +1564,7 @@ void StickersBox::Inner::paintRowThumbnail(
 void StickersBox::Inner::validateLottieAnimation(not_null<Row*> row) {
 	if (row->lottie
 		|| !ChatHelpers::HasLottieThumbnail(
-			row->set->flags,
+			row->set->thumbnailType(),
 			row->thumbnailMedia.get(),
 			row->stickerMedia.get())) {
 		return;
@@ -1579,7 +1573,7 @@ void StickersBox::Inner::validateLottieAnimation(not_null<Row*> row) {
 		row->thumbnailMedia.get(),
 		row->stickerMedia.get(),
 		ChatHelpers::StickerLottieSize::SetsListThumbnail,
-		QSize(_st.photoSize, _st.photoSize) * cIntRetinaFactor());
+		QSize(_st.photoSize, _st.photoSize) * style::DevicePixelRatio());
 	if (!player) {
 		return;
 	}
@@ -1593,7 +1587,7 @@ void StickersBox::Inner::validateLottieAnimation(not_null<Row*> row) {
 void StickersBox::Inner::validateWebmAnimation(not_null<Row*> row) {
 	if (row->webm
 		|| !ChatHelpers::HasWebmThumbnail(
-			row->set->flags,
+			row->set->thumbnailType(),
 			row->thumbnailMedia.get(),
 			row->stickerMedia.get())) {
 		return;
@@ -1766,8 +1760,11 @@ void StickersBox::Inner::setActionDown(int newActionDown) {
 				const auto &st = installedSet
 					? st::stickersTrendingInstalled
 					: st::stickersTrendingAdd;
+				const auto buttonTextWidth = installedSet
+					? _installedWidth
+					: _addWidth;
 				auto rippleMask = Ui::RippleAnimation::RoundRectMask(
-					QSize(_addWidth - st.width, st.height),
+					QSize(buttonTextWidth - st.width, st.height),
 					st::roundRadiusLarge);
 				ensureRipple(
 					st.ripple,
@@ -1908,9 +1905,19 @@ void StickersBox::Inner::updateSelected() {
 			selected = selectedIndex;
 			local.setY(local.y() - _itemsTop - selectedIndex * _rowHeight);
 			const auto row = _rows[selectedIndex].get();
-			if (!_megagroupSet && (_isInstalledTab || (_section == Section::Featured) || !row->isInstalled() || row->isArchived() || row->removed)) {
+			if (!_megagroupSet
+				&& (_isInstalledTab
+					|| (_section == Section::Featured)
+					|| !row->isInstalled()
+					|| row->isArchived()
+					|| row->removed)) {
 				auto removeButton = (_isInstalledTab && !row->removed);
-				auto rect = myrtlrect(relativeButtonRect(removeButton, false));
+
+				const auto installedSetButton = !_isInstalledTab
+					&& row->isInstalled()
+					&& !row->isArchived()
+					&& !row->removed;
+				auto rect = myrtlrect(relativeButtonRect(removeButton, installedSetButton));
 				actionSel = rect.contains(local) ? selectedIndex : -1;
 			} else {
 				actionSel = -1;
@@ -1963,12 +1970,19 @@ void StickersBox::Inner::mouseReleaseEvent(QMouseEvent *e) {
 
 	_mouse = e->globalPos();
 	updateSelected();
-	if (_actionDown == _actionSel && _actionSel >= 0) {
-		const auto callback = _rows[_actionDown]->removed
-			? _installSetCallback
-			: _removeSetCallback;
+	const auto down = _actionDown;
+	setActionDown(-1);
+	if (down == _actionSel && _actionSel >= 0) {
+		const auto row = _rows[down].get();
+		const auto installedSet = row->isInstalled()
+			&& !row->isArchived()
+			&& !row->removed;
+		const auto callback = installedSet
+			? _removeSetCallback
+			: _installSetCallback;
 		if (callback) {
-			callback(_rows[_actionDown]->set->id);
+			row->ripple.reset();
+			callback(row->set->id);
 		}
 	} else if (_dragging >= 0) {
 		_rows[_dragging]->yadd.start(0.);
@@ -1979,7 +1993,7 @@ void StickersBox::Inner::mouseReleaseEvent(QMouseEvent *e) {
 		}
 
 		_dragging = _started = -1;
-	} else if (pressed == _selected && _actionSel < 0 && _actionDown < 0) {
+	} else if (pressed == _selected && _actionSel < 0 && down < 0) {
 		const auto selectedIndex = [&] {
 			if (auto index = std::get_if<int>(&_selected)) {
 				return *index;
@@ -2003,7 +2017,6 @@ void StickersBox::Inner::mouseReleaseEvent(QMouseEvent *e) {
 			showSetByRow(*_megagroupSelectedSet);
 		}
 	}
-	setActionDown(-1);
 }
 
 void StickersBox::Inner::saveGroupSet(Fn<void()> done) {
@@ -2050,10 +2063,8 @@ void StickersBox::Inner::checkGroupLevel(Fn<void()> done) {
 			return std::optional<Ui::AskBoostReason>();
 		}
 		_checkingGroupLevel = false;
-		const auto appConfig = &peer->session().account().appConfig();
-		const auto required = appConfig->get<int>(
-			"group_emoji_stickers_level_min",
-			4);
+		const auto required = Data::LevelLimits(
+			&peer->session()).groupEmojiStickersLevelMin();
 		if (level >= required) {
 			save();
 			return std::optional<Ui::AskBoostReason>();

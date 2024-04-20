@@ -27,12 +27,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/round_rect.h"
 #include "ui/text/text_utilities.h"
 #include "ui/power_saving.h"
+#include "data/components/sponsored_messages.h"
 #include "data/data_session.h"
 #include "data/data_user.h"
 #include "data/data_channel.h"
 #include "data/data_forum_topic.h"
 #include "data/data_message_reactions.h"
-#include "data/data_sponsored_messages.h"
 #include "lang/lang_keys.h"
 #include "mainwidget.h"
 #include "main/main_session.h"
@@ -358,6 +358,11 @@ QString FastReplyText() {
 	});
 }
 
+struct SecondRightAction final {
+	std::unique_ptr<Ui::RippleAnimation> ripple;
+	ClickHandlerPtr link;
+};
+
 } // namespace
 
 struct Message::CommentsButton {
@@ -379,6 +384,7 @@ struct Message::RightAction {
 	std::unique_ptr<Ui::RippleAnimation> ripple;
 	ClickHandlerPtr link;
 	QPoint lastPoint;
+	std::unique_ptr<SecondRightAction> second;
 };
 
 LogEntryOriginal::LogEntryOriginal() = default;
@@ -428,6 +434,17 @@ Message::Message(
 			_bottomInfo.continueReactionAnimations(std::move(animations));
 		}
 	}
+	if (data->isSponsored()) {
+		const auto &session = data->history()->session();
+		const auto details = session.sponsoredMessages().lookupDetails(
+			data->fullId());
+		if (details.canReport) {
+			_rightAction = std::make_unique<RightAction>();
+			_rightAction->second = std::make_unique<SecondRightAction>();
+
+			_rightAction->second->link = ReportSponsoredClickHandler(data);
+		}
+	}
 }
 
 Message::~Message() {
@@ -462,8 +479,10 @@ void Message::refreshRightBadge() {
 				: tr::lng_channel_badge(tr::now);
 		} else if (item->author()->isMegagroup()) {
 			if (const auto msgsigned = item->Get<HistoryMessageSigned>()) {
-				Assert(msgsigned->isAnonymousRank);
-				return msgsigned->postAuthor;
+				if (!msgsigned->viaBusinessBot) {
+					Assert(msgsigned->isAnonymousRank);
+					return msgsigned->author;
+				}
 			}
 		}
 		const auto channel = item->history()->peer->asMegagroup();
@@ -1826,6 +1845,26 @@ void Message::clickHandlerPressedChanged(
 		return;
 	} else if (_rightAction && (handler == _rightAction->link)) {
 		toggleRightActionRipple(pressed);
+	} else if (_rightAction
+		&& _rightAction->second
+		&& (handler == _rightAction->second->link)) {
+		const auto rightSize = rightActionSize();
+		Assert(rightSize != std::nullopt);
+		if (pressed) {
+			if (!_rightAction->second->ripple) {
+				// Create a ripple.
+				_rightAction->second->ripple
+					= std::make_unique<Ui::RippleAnimation>(
+						st::defaultRippleAnimation,
+						Ui::RippleAnimation::RoundRectMask(
+							Size(rightSize->width()),
+							rightSize->width() / 2),
+						[=] { repaint(); });
+			}
+			_rightAction->second->ripple->add(_rightAction->lastPoint);
+		} else if (_rightAction->second->ripple) {
+			_rightAction->second->ripple->lastStop();
+		}
 	} else if (_comments && (handler == _comments->link)) {
 		toggleCommentsButtonRipple(pressed);
 	} else if (_topicButton && (handler == _topicButton->link)) {
@@ -1857,15 +1896,18 @@ void Message::toggleCommentsButtonRipple(bool pressed) {
 void Message::toggleRightActionRipple(bool pressed) {
 	Expects(_rightAction != nullptr);
 
-	const auto size = rightActionSize();
-	Assert(size != std::nullopt);
+	const auto rightSize = rightActionSize();
+	Assert(rightSize != std::nullopt);
 
 	if (pressed) {
 		if (!_rightAction->ripple) {
 			// Create a ripple.
+			const auto size = _rightAction->second
+				? Size(rightSize->width())
+				: *rightSize;
 			_rightAction->ripple = std::make_unique<Ui::RippleAnimation>(
 				st::defaultRippleAnimation,
-				Ui::RippleAnimation::RoundRectMask(*size, size->width() / 2),
+				Ui::RippleAnimation::RoundRectMask(size, size.width() / 2),
 				[=] { repaint(); });
 		}
 		_rightAction->ripple->add(_rightAction->lastPoint);
@@ -2042,7 +2084,8 @@ bool Message::hasFromPhoto() const {
 	case Context::TTLViewer:
 	case Context::Pinned:
 	case Context::Replies:
-	case Context::SavedSublist: {
+	case Context::SavedSublist:
+	case Context::ScheduledTopic: {
 		const auto item = data();
 		if (item->isPost()) {
 			return false;
@@ -2061,6 +2104,7 @@ bool Message::hasFromPhoto() const {
 		return !item->out() && !item->history()->peer->isUser();
 	} break;
 	case Context::ContactPreview:
+	case Context::ShortcutMessages:
 		return false;
 	}
 	Unexpected("Context in Message::hasFromPhoto.");
@@ -3030,7 +3074,7 @@ void Message::refreshReactions() {
 							= ExtractController(context)) {
 							ShowPremiumPreviewBox(
 								controller,
-								PremiumPreview::TagsForMessages);
+								PremiumFeature::TagsForMessages);
 						}
 						return;
 					}
@@ -3240,7 +3284,8 @@ bool Message::hasFromName() const {
 	case Context::TTLViewer:
 	case Context::Pinned:
 	case Context::Replies:
-	case Context::SavedSublist: {
+	case Context::SavedSublist:
+	case Context::ScheduledTopic: {
 		const auto item = data();
 		const auto peer = item->history()->peer;
 		if (hasOutLayout() && !item->from()->isChannel()) {
@@ -3268,6 +3313,7 @@ bool Message::hasFromName() const {
 		return false;
 	} break;
 	case Context::ContactPreview:
+	case Context::ShortcutMessages:
 		return false;
 	}
 	Unexpected("Context in Message::hasFromName.");
@@ -3306,6 +3352,9 @@ bool Message::hasOutLayout() const {
 	const auto item = data();
 	if (item->history()->peer->isSelf()) {
 		if (const auto forwarded = item->Get<HistoryMessageForwarded>()) {
+			if (context() == Context::ShortcutMessages) {
+				return true;
+			}
 			return (context() == Context::SavedSublist)
 				&& (!forwarded->forwardOfForward()
 					? (forwarded->originalSender
@@ -3441,7 +3490,9 @@ std::optional<QSize> Message::rightActionSize() const {
 			: QSize(st::historyFastShareSize, st::historyFastShareSize);
 	}
 	return data()->isSponsored()
-		? QSize(st::historyFastCloseSize, st::historyFastCloseSize)
+		? ((_rightAction && _rightAction->second)
+			? QSize(st::historyFastCloseSize, st::historyFastCloseSize * 2)
+			: QSize(st::historyFastCloseSize, st::historyFastCloseSize))
 		: (displayFastShare() || displayGoToOriginal())
 		? QSize(st::historyFastShareSize, st::historyFastShareSize)
 		: std::optional<QSize>();
@@ -3507,6 +3558,19 @@ void Message::drawRightAction(
 			_rightAction->ripple.reset();
 		}
 	}
+	if (_rightAction->second && _rightAction->second->ripple) {
+		const auto &stm = context.messageStyle();
+		const auto colorOverride = &stm->msgWaveformInactive->c;
+		_rightAction->second->ripple->paint(
+			p,
+			left,
+			top + st::historyFastCloseSize,
+			size->width(),
+			colorOverride);
+		if (_rightAction->second->ripple->empty()) {
+			_rightAction->second->ripple.reset();
+		}
+	}
 
 	p.setPen(Qt::NoPen);
 	p.setBrush(st->msgServiceBg());
@@ -3544,6 +3608,13 @@ void Message::drawRightAction(
 				views->repliesSmall.text,
 				views->repliesSmall.textWidth);
 		}
+	} else if (_rightAction->second) {
+		st->historyFastCloseIcon().paintInCenter(
+			p,
+			{ left, top, size->width(), size->width() });
+		st->historyFastMoreIcon().paintInCenter(
+			p,
+			{ left, size->width() + top, size->width(), size->width() });
 	} else {
 		const auto &icon = data()->isSponsored()
 			? st->historyFastCloseIcon()
@@ -3564,6 +3635,10 @@ ClickHandlerPtr Message::rightActionLink(
 	}
 	if (pressPoint) {
 		_rightAction->lastPoint = *pressPoint;
+	}
+	if (_rightAction->second
+		&& (_rightAction->lastPoint.y() > st::historyFastCloseSize)) {
+		return _rightAction->second->link;
 	}
 	return _rightAction->link;
 }

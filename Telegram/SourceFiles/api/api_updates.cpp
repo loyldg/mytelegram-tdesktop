@@ -20,6 +20,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mtproto/mtp_instance.h"
 #include "mtproto/mtproto_config.h"
 #include "mtproto/mtproto_dc_options.h"
+#include "data/business/data_shortcut_messages.h"
+#include "data/components/scheduled_messages.h"
 #include "data/notify/data_notify_settings.h"
 #include "data/stickers/data_stickers.h"
 #include "data/data_saved_messages.h"
@@ -36,7 +38,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_histories.h"
 #include "data/data_folder.h"
 #include "data/data_forum.h"
-#include "data/data_scheduled_messages.h"
 #include "data/data_send_action.h"
 #include "data/data_stories.h"
 #include "data/data_message_reactions.h"
@@ -93,7 +94,7 @@ void ProcessScheduledMessageWithElapsedTime(
 		// Note that when a message is scheduled until online
 		// while the recipient is already online, the server sends
 		// an ordinary new message with skipped "from_scheduled" flag.
-		session->data().scheduledMessages().checkEntitiesAndUpdate(data);
+		session->scheduledMessages().checkEntitiesAndUpdate(data);
 	}
 }
 
@@ -1119,6 +1120,7 @@ void Updates::applyUpdatesNoPtsCheck(const MTPUpdates &updates) {
 				MTPPeer(), // saved_peer_id
 				d.vfwd_from() ? *d.vfwd_from() : MTPMessageFwdHeader(),
 				MTP_long(d.vvia_bot_id().value_or_empty()),
+				MTPlong(), // via_business_bot_id
 				d.vreply_to() ? *d.vreply_to() : MTPMessageReplyHeader(),
 				d.vdate(),
 				d.vmessage(),
@@ -1133,7 +1135,8 @@ void Updates::applyUpdatesNoPtsCheck(const MTPUpdates &updates) {
 				MTPlong(),
 				MTPMessageReactions(),
 				MTPVector<MTPRestrictionReason>(),
-				MTP_int(d.vttl_period().value_or_empty())),
+				MTP_int(d.vttl_period().value_or_empty()),
+				MTPint()), // quick_reply_shortcut_id
 			MessageFlags(),
 			NewMessageType::Unread);
 	} break;
@@ -1152,6 +1155,7 @@ void Updates::applyUpdatesNoPtsCheck(const MTPUpdates &updates) {
 				MTPPeer(), // saved_peer_id
 				d.vfwd_from() ? *d.vfwd_from() : MTPMessageFwdHeader(),
 				MTP_long(d.vvia_bot_id().value_or_empty()),
+				MTPlong(), // via_business_bot_id
 				d.vreply_to() ? *d.vreply_to() : MTPMessageReplyHeader(),
 				d.vdate(),
 				d.vmessage(),
@@ -1166,7 +1170,8 @@ void Updates::applyUpdatesNoPtsCheck(const MTPUpdates &updates) {
 				MTPlong(),
 				MTPMessageReactions(),
 				MTPVector<MTPRestrictionReason>(),
-				MTP_int(d.vttl_period().value_or_empty())),
+				MTP_int(d.vttl_period().value_or_empty()),
+				MTPint()), // quick_reply_shortcut_id
 			MessageFlags(),
 			NewMessageType::Unread);
 	} break;
@@ -1459,7 +1464,9 @@ void Updates::applyUpdates(
 			if (const auto id = owner.messageIdByRandomId(randomId)) {
 				const auto local = owner.message(id);
 				if (local && local->isScheduled()) {
-					owner.scheduledMessages().sendNowSimpleMessage(d, local);
+					session().scheduledMessages().sendNowSimpleMessage(
+						d,
+						local);
 				}
 			}
 			const auto wasAlready = (lookupMessage() != nullptr);
@@ -1556,7 +1563,9 @@ void Updates::feedUpdate(const MTPUpdate &update) {
 			auto &owner = session().data();
 			if (const auto local = owner.message(id)) {
 				if (local->isScheduled()) {
-					session().data().scheduledMessages().apply(d, local);
+					session().scheduledMessages().apply(d, local);
+				} else if (local->isBusinessShortcut()) {
+					session().data().shortcutMessages().apply(d, local);
 				} else {
 					const auto existing = session().data().message(
 						id.peer,
@@ -1764,12 +1773,37 @@ void Updates::feedUpdate(const MTPUpdate &update) {
 
 	case mtpc_updateNewScheduledMessage: {
 		const auto &d = update.c_updateNewScheduledMessage();
-		session().data().scheduledMessages().apply(d);
+		session().scheduledMessages().apply(d);
 	} break;
 
 	case mtpc_updateDeleteScheduledMessages: {
 		const auto &d = update.c_updateDeleteScheduledMessages();
-		session().data().scheduledMessages().apply(d);
+		session().scheduledMessages().apply(d);
+	} break;
+
+	case mtpc_updateQuickReplies: {
+		const auto &d = update.c_updateQuickReplies();
+		session().data().shortcutMessages().apply(d);
+	} break;
+
+	case mtpc_updateNewQuickReply: {
+		const auto &d = update.c_updateNewQuickReply();
+		session().data().shortcutMessages().apply(d);
+	} break;
+
+	case mtpc_updateDeleteQuickReply: {
+		const auto &d = update.c_updateDeleteQuickReply();
+		session().data().shortcutMessages().apply(d);
+	} break;
+
+	case mtpc_updateQuickReplyMessage: {
+		const auto &d = update.c_updateQuickReplyMessage();
+		session().data().shortcutMessages().apply(d);
+	} break;
+
+	case mtpc_updateDeleteQuickReplyMessages: {
+		const auto &d = update.c_updateDeleteQuickReplyMessages();
+		session().data().shortcutMessages().apply(d);
 	} break;
 
 	case mtpc_updateWebPage: {
@@ -1911,7 +1945,7 @@ void Updates::feedUpdate(const MTPUpdate &update) {
 		const auto &d = update.c_updatePeerSettings();
 		const auto peerId = peerFromMTP(d.vpeer());
 		if (const auto peer = session().data().peerLoaded(peerId)) {
-			peer->setSettings(d.vsettings());
+			peer->setBarSettings(d.vsettings());
 		}
 	} break;
 

@@ -26,7 +26,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "info/profile/info_profile_values.h"
 #include "info/settings/info_settings_widget.h" // SectionCustomTopBarData.
 #include "lang/lang_keys.h"
-#include "main/main_account.h"
 #include "main/main_app_config.h"
 #include "main/main_session.h"
 #include "settings/settings_common_session.h"
@@ -169,7 +168,7 @@ struct Entry {
 	const style::icon *icon;
 	rpl::producer<QString> title;
 	rpl::producer<QString> description;
-	PremiumPreview section = PremiumPreview::DoubleLimits;
+	PremiumFeature section = PremiumFeature::DoubleLimits;
 	bool newBadge = false;
 };
 
@@ -197,6 +196,7 @@ using Order = std::vector<QString>;
 		u"infinite_reactions"_q,
 		u"animated_userpics"_q,
 		u"premium_stickers"_q,
+		u"business"_q,
 	};
 }
 
@@ -208,7 +208,7 @@ using Order = std::vector<QString>;
 				&st::settingsPremiumIconTags,
 				tr::lng_premium_summary_subtitle_tags_for_messages(),
 				tr::lng_premium_summary_about_tags_for_messages(),
-				PremiumPreview::TagsForMessages,
+				PremiumFeature::TagsForMessages,
 				true,
 			},
 		},
@@ -218,7 +218,7 @@ using Order = std::vector<QString>;
 				&st::settingsPremiumIconLastSeen,
 				tr::lng_premium_summary_subtitle_last_seen(),
 				tr::lng_premium_summary_about_last_seen(),
-				PremiumPreview::LastSeen,
+				PremiumFeature::LastSeen,
 				true,
 			},
 		},
@@ -228,7 +228,7 @@ using Order = std::vector<QString>;
 				&st::settingsPremiumIconPrivacy,
 				tr::lng_premium_summary_subtitle_message_privacy(),
 				tr::lng_premium_summary_about_message_privacy(),
-				PremiumPreview::MessagePrivacy,
+				PremiumFeature::MessagePrivacy,
 				true,
 			},
 		},
@@ -238,7 +238,7 @@ using Order = std::vector<QString>;
 				&st::settingsPremiumIconWallpapers,
 				tr::lng_premium_summary_subtitle_wallpapers(),
 				tr::lng_premium_summary_about_wallpapers(),
-				PremiumPreview::Wallpapers,
+				PremiumFeature::Wallpapers,
 			},
 		},
 		{
@@ -247,7 +247,7 @@ using Order = std::vector<QString>;
 				&st::settingsPremiumIconStories,
 				tr::lng_premium_summary_subtitle_stories(),
 				tr::lng_premium_summary_about_stories(),
-				PremiumPreview::Stories,
+				PremiumFeature::Stories,
 			},
 		},
 		{
@@ -256,7 +256,7 @@ using Order = std::vector<QString>;
 				&st::settingsPremiumIconDouble,
 				tr::lng_premium_summary_subtitle_double_limits(),
 				tr::lng_premium_summary_about_double_limits(),
-				PremiumPreview::DoubleLimits,
+				PremiumFeature::DoubleLimits,
 			},
 		},
 		{
@@ -265,7 +265,7 @@ using Order = std::vector<QString>;
 				&st::settingsPremiumIconFiles,
 				tr::lng_premium_summary_subtitle_more_upload(),
 				tr::lng_premium_summary_about_more_upload(),
-				PremiumPreview::MoreUpload,
+				PremiumFeature::MoreUpload,
 			},
 		},
 		{
@@ -274,7 +274,7 @@ using Order = std::vector<QString>;
 				&st::settingsPremiumIconSpeed,
 				tr::lng_premium_summary_subtitle_faster_download(),
 				tr::lng_premium_summary_about_faster_download(),
-				PremiumPreview::FasterDownload,
+				PremiumFeature::FasterDownload,
 			},
 		},
 		{
@@ -283,7 +283,7 @@ using Order = std::vector<QString>;
 				&st::settingsPremiumIconVoice,
 				tr::lng_premium_summary_subtitle_voice_to_text(),
 				tr::lng_premium_summary_about_voice_to_text(),
-				PremiumPreview::VoiceToText,
+				PremiumFeature::VoiceToText,
 			},
 		},
 		{
@@ -292,7 +292,7 @@ using Order = std::vector<QString>;
 				&st::settingsPremiumIconChannelsOff,
 				tr::lng_premium_summary_subtitle_no_ads(),
 				tr::lng_premium_summary_about_no_ads(),
-				PremiumPreview::NoAds,
+				PremiumFeature::NoAds,
 			},
 		},
 		{
@@ -301,7 +301,7 @@ using Order = std::vector<QString>;
 				&st::settingsPremiumIconStatus,
 				tr::lng_premium_summary_subtitle_emoji_status(),
 				tr::lng_premium_summary_about_emoji_status(),
-				PremiumPreview::EmojiStatus,
+				PremiumFeature::EmojiStatus,
 			},
 		},
 		{
@@ -310,7 +310,7 @@ using Order = std::vector<QString>;
 				&st::settingsPremiumIconLike,
 				tr::lng_premium_summary_subtitle_infinite_reactions(),
 				tr::lng_premium_summary_about_infinite_reactions(),
-				PremiumPreview::InfiniteReactions,
+				PremiumFeature::InfiniteReactions,
 			},
 		},
 		{
@@ -319,7 +319,7 @@ using Order = std::vector<QString>;
 				&st::settingsIconStickers,
 				tr::lng_premium_summary_subtitle_premium_stickers(),
 				tr::lng_premium_summary_about_premium_stickers(),
-				PremiumPreview::Stickers,
+				PremiumFeature::Stickers,
 			},
 		},
 		{
@@ -328,7 +328,7 @@ using Order = std::vector<QString>;
 				&st::settingsIconEmoji,
 				tr::lng_premium_summary_subtitle_animated_emoji(),
 				tr::lng_premium_summary_about_animated_emoji(),
-				PremiumPreview::AnimatedEmoji,
+				PremiumFeature::AnimatedEmoji,
 			},
 		},
 		{
@@ -337,7 +337,7 @@ using Order = std::vector<QString>;
 				&st::settingsIconChat,
 				tr::lng_premium_summary_subtitle_advanced_chat_management(),
 				tr::lng_premium_summary_about_advanced_chat_management(),
-				PremiumPreview::AdvancedChatManagement,
+				PremiumFeature::AdvancedChatManagement,
 			},
 		},
 		{
@@ -346,7 +346,7 @@ using Order = std::vector<QString>;
 				&st::settingsPremiumIconStar,
 				tr::lng_premium_summary_subtitle_profile_badge(),
 				tr::lng_premium_summary_about_profile_badge(),
-				PremiumPreview::ProfileBadge,
+				PremiumFeature::ProfileBadge,
 			},
 		},
 		{
@@ -355,7 +355,7 @@ using Order = std::vector<QString>;
 				&st::settingsPremiumIconPlay,
 				tr::lng_premium_summary_subtitle_animated_userpics(),
 				tr::lng_premium_summary_about_animated_userpics(),
-				PremiumPreview::AnimatedUserpics,
+				PremiumFeature::AnimatedUserpics,
 			},
 		},
 		{
@@ -364,7 +364,17 @@ using Order = std::vector<QString>;
 				&st::settingsPremiumIconTranslations,
 				tr::lng_premium_summary_subtitle_translation(),
 				tr::lng_premium_summary_about_translation(),
-				PremiumPreview::RealTimeTranslation,
+				PremiumFeature::RealTimeTranslation,
+			},
+		},
+		{
+			u"business"_q,
+			Entry{
+				&st::settingsPremiumIconBusiness,
+				tr::lng_premium_summary_subtitle_business(),
+				tr::lng_premium_summary_about_business(),
+				PremiumFeature::Business,
+				true,
 			},
 		},
 	};
@@ -960,7 +970,7 @@ void Premium::setupContent() {
 
 	setupSubscriptionOptions(content);
 
-	auto buttonCallback = [=](PremiumPreview section) {
+	auto buttonCallback = [=](PremiumFeature section) {
 		_setPaused(true);
 		const auto hidden = crl::guard(this, [=] { _setPaused(false); });
 
@@ -1179,7 +1189,7 @@ QPointer<Ui::RpWidget> Premium::createPinnedToBottom(
 		std::move(buttonText),
 		std::nullopt,
 		[=, options = session->api().premium().subscriptionOptions()] {
-			const auto value = _radioGroup->value();
+			const auto value = _radioGroup->current();
 			return (value < options.size() && value >= 0)
 				? options[value].botUrl
 				: QString();
@@ -1201,8 +1211,8 @@ QPointer<Ui::RpWidget> Premium::createPinnedToBottom(
 #endif
 	{
 		const auto callback = [=](int value) {
-			const auto options =
-				_controller->session().api().premium().subscriptionOptions();
+			auto &api = _controller->session().api();
+			const auto options = api.premium().subscriptionOptions();
 			if (options.empty()) {
 				return;
 			}
@@ -1256,7 +1266,9 @@ template <>
 struct SectionFactory<Premium> : AbstractSectionFactory {
 	object_ptr<AbstractSection> create(
 		not_null<QWidget*> parent,
-		not_null<Window::SessionController*> controller
+		not_null<Window::SessionController*> controller,
+		not_null<Ui::ScrollArea*> scroll,
+		rpl::producer<Container> containerValue
 	) const final override {
 		return object_ptr<Premium>(parent, controller);
 	}
@@ -1318,12 +1330,12 @@ void ShowEmojiStatusPremium(
 void StartPremiumPayment(
 		not_null<Window::SessionController*> controller,
 		const QString &ref) {
-	const auto account = &controller->session().account();
-	const auto username = account->appConfig().get<QString>(
-		"premium_bot_username",
+	const auto session = &controller->session();
+	const auto username = session->appConfig().get<QString>(
+		u"premium_bot_username"_q,
 		QString());
-	const auto slug = account->appConfig().get<QString>(
-		"premium_invoice_slug",
+	const auto slug = session->appConfig().get<QString>(
+		u"premium_invoice_slug"_q,
 		QString());
 	if (!username.isEmpty()) {
 		controller->showPeerByLink(Window::PeerByLinkInfo{
@@ -1337,7 +1349,7 @@ void StartPremiumPayment(
 	}
 }
 
-QString LookupPremiumRef(PremiumPreview section) {
+QString LookupPremiumRef(PremiumFeature section) {
 	for (const auto &[ref, entry] : EntryMap()) {
 		if (entry.section == section) {
 			return ref;
@@ -1452,9 +1464,26 @@ not_null<Ui::GradientButton*> CreateSubscribeButton(
 		SubscribeButtonArgs &&args) {
 	Expects(args.show || args.controller);
 
-	if (!args.show && args.controller) {
-		args.show = args.controller->uiShow();
-	}
+	auto show = args.show ? std::move(args.show) : args.controller->uiShow();
+	auto resolve = [show](
+			not_null<Main::Session*> session,
+			ChatHelpers::WindowUsage usage) {
+		Expects(session == &show->session());
+
+		return show->resolveWindow(usage);
+	};
+	return CreateSubscribeButton(
+		std::move(show),
+		std::move(resolve),
+		std::move(args));
+}
+
+not_null<Ui::GradientButton*> CreateSubscribeButton(
+		std::shared_ptr<::Main::SessionShow> show,
+		Fn<Window::SessionController*(
+			not_null<::Main::Session*>,
+			ChatHelpers::WindowUsage)> resolveWindow,
+		SubscribeButtonArgs &&args) {
 	const auto result = Ui::CreateChild<Ui::GradientButton>(
 		args.parent.get(),
 		args.gradientStops
@@ -1462,12 +1491,18 @@ not_null<Ui::GradientButton*> CreateSubscribeButton(
 			: Ui::Premium::ButtonGradientStops());
 
 	result->setClickedCallback([
-			show = args.show,
+			show,
+			resolveWindow,
+			promo = args.showPromo,
 			computeRef = args.computeRef,
 			computeBotUrl = args.computeBotUrl] {
-		const auto window = show->resolveWindow(
+		const auto window = resolveWindow(
+			&show->session(),
 			ChatHelpers::WindowUsage::PremiumPromo);
 		if (!window) {
+			return;
+		} else if (promo) {
+			Settings::ShowPremium(window, computeRef());
 			return;
 		}
 		const auto url = computeBotUrl ? computeBotUrl() : QString();
@@ -1491,7 +1526,7 @@ not_null<Ui::GradientButton*> CreateSubscribeButton(
 	const auto &st = st::premiumPreviewBox.button;
 	result->resize(args.parent->width(), st.height);
 
-	const auto premium = &args.show->session().api().premium();
+	const auto premium = &show->session().api().premium();
 	premium->reload();
 	const auto computeCost = [=] {
 		const auto amount = premium->monthlyAmount();
@@ -1524,50 +1559,50 @@ not_null<Ui::GradientButton*> CreateSubscribeButton(
 	return result;
 }
 
-[[nodiscard]] std::vector<PremiumPreview> PremiumPreviewOrder(
+std::vector<PremiumFeature> PremiumFeaturesOrder(
 		not_null<Main::Session*> session) {
-	const auto mtpOrder = session->account().appConfig().get<Order>(
+	const auto mtpOrder = session->appConfig().get<Order>(
 		"premium_promo_order",
 		FallbackOrder());
 	return ranges::views::all(
 		mtpOrder
 	) | ranges::views::transform([](const QString &s) {
 		if (s == u"more_upload"_q) {
-			return PremiumPreview::MoreUpload;
+			return PremiumFeature::MoreUpload;
 		} else if (s == u"faster_download"_q) {
-			return PremiumPreview::FasterDownload;
+			return PremiumFeature::FasterDownload;
 		} else if (s == u"voice_to_text"_q) {
-			return PremiumPreview::VoiceToText;
+			return PremiumFeature::VoiceToText;
 		} else if (s == u"no_ads"_q) {
-			return PremiumPreview::NoAds;
+			return PremiumFeature::NoAds;
 		} else if (s == u"emoji_status"_q) {
-			return PremiumPreview::EmojiStatus;
+			return PremiumFeature::EmojiStatus;
 		} else if (s == u"infinite_reactions"_q) {
-			return PremiumPreview::InfiniteReactions;
+			return PremiumFeature::InfiniteReactions;
 		} else if (s == u"saved_tags"_q) {
-			return PremiumPreview::TagsForMessages;
+			return PremiumFeature::TagsForMessages;
 		} else if (s == u"last_seen"_q) {
-			return PremiumPreview::LastSeen;
+			return PremiumFeature::LastSeen;
 		} else if (s == u"message_privacy"_q) {
-			return PremiumPreview::MessagePrivacy;
+			return PremiumFeature::MessagePrivacy;
 		} else if (s == u"premium_stickers"_q) {
-			return PremiumPreview::Stickers;
+			return PremiumFeature::Stickers;
 		} else if (s == u"animated_emoji"_q) {
-			return PremiumPreview::AnimatedEmoji;
+			return PremiumFeature::AnimatedEmoji;
 		} else if (s == u"advanced_chat_management"_q) {
-			return PremiumPreview::AdvancedChatManagement;
+			return PremiumFeature::AdvancedChatManagement;
 		} else if (s == u"profile_badge"_q) {
-			return PremiumPreview::ProfileBadge;
+			return PremiumFeature::ProfileBadge;
 		} else if (s == u"animated_userpics"_q) {
-			return PremiumPreview::AnimatedUserpics;
+			return PremiumFeature::AnimatedUserpics;
 		} else if (s == u"translations"_q) {
-			return PremiumPreview::RealTimeTranslation;
+			return PremiumFeature::RealTimeTranslation;
 		} else if (s == u"wallpapers"_q) {
-			return PremiumPreview::Wallpapers;
+			return PremiumFeature::Wallpapers;
 		}
-		return PremiumPreview::kCount;
-	}) | ranges::views::filter([](PremiumPreview type) {
-		return (type != PremiumPreview::kCount);
+		return PremiumFeature::kCount;
+	}) | ranges::views::filter([](PremiumFeature type) {
+		return (type != PremiumFeature::kCount);
 	}) | ranges::to_vector;
 }
 
@@ -1575,7 +1610,7 @@ void AddSummaryPremium(
 		not_null<Ui::VerticalLayout*> content,
 		not_null<Window::SessionController*> controller,
 		const QString &ref,
-		Fn<void(PremiumPreview)> buttonCallback) {
+		Fn<void(PremiumFeature)> buttonCallback) {
 	const auto &stDefault = st::settingsButton;
 	const auto &stLabel = st::defaultFlatLabel;
 	const auto iconSize = st::settingsPremiumIconDouble.size();
@@ -1670,8 +1705,8 @@ void AddSummaryPremium(
 	auto icons = std::vector<const style::icon *>();
 	icons.reserve(int(entryMap.size()));
 	{
-		const auto &account = controller->session().account();
-		const auto mtpOrder = account.appConfig().get<Order>(
+		const auto session = &controller->session();
+		const auto mtpOrder = session->appConfig().get<Order>(
 			"premium_promo_order",
 			FallbackOrder());
 		const auto processEntry = [&](Entry &entry) {

@@ -14,6 +14,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/view/history_view_sticker_toast.h"
 #include "history/view/history_view_cursor_state.h"
 #include "history/view/history_view_contact_status.h"
+#include "history/view/history_view_scheduled_section.h"
 #include "history/view/history_view_service_message.h"
 #include "history/view/history_view_pinned_tracker.h"
 #include "history/view/history_view_pinned_section.h"
@@ -51,6 +52,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/mime_type.h"
 #include "main/main_session.h"
 #include "main/main_session_settings.h"
+#include "data/components/scheduled_messages.h"
 #include "data/data_session.h"
 #include "data/data_user.h"
 #include "data/data_chat.h"
@@ -215,10 +217,25 @@ RepliesWidget::RepliesWidget(
 , _topBarShadow(this)
 , _composeControls(std::make_unique<ComposeControls>(
 	this,
-	controller,
-	[=](not_null<DocumentData*> emoji) { listShowPremiumToast(emoji); },
-	ComposeControls::Mode::Normal,
-	SendMenu::Type::SilentOnly))
+	ComposeControlsDescriptor{
+		.show = controller->uiShow(),
+		.unavailableEmojiPasted = [=](not_null<DocumentData*> emoji) {
+			listShowPremiumToast(emoji);
+		},
+		.mode = ComposeControls::Mode::Normal,
+		.sendMenuType = _topic
+			? SendMenu::Type::Scheduled
+			: SendMenu::Type::SilentOnly,
+		.regularWindow = controller,
+		.stickerOrEmojiChosen = controller->stickerOrEmojiChosen(),
+		.scheduledToggleValue = _topic
+			? rpl::single(rpl::empty_value()) | rpl::then(
+				session().scheduledMessages().updates(_topic->owningHistory())
+			) | rpl::map([=] {
+				return session().scheduledMessages().hasFor(_topic);
+			}) | rpl::type_erased()
+			: rpl::single(false),
+	}))
 , _translateBar(std::make_unique<TranslateBar>(this, controller, history))
 , _scroll(std::make_unique<Ui::ScrollArea>(
 	this,
@@ -298,7 +315,9 @@ RepliesWidget::RepliesWidget(
 		if (const auto item = session().data().message(fullId)) {
 			const auto media = item->media();
 			if (!media || media->webpage() || media->allowsEditCaption()) {
-				_composeControls->editMessage(fullId);
+				_composeControls->editMessage(
+					fullId,
+					_inner->getSelectedTextRange(item));
 			}
 		}
 	}, _inner->lifetime());
@@ -357,6 +376,20 @@ RepliesWidget::RepliesWidget(
 			Data::HistoryUpdate::Flag::OutboxRead
 		) | rpl::start_with_next([=] {
 			_inner->update();
+		}, lifetime());
+	} else {
+		session().api().sendActions(
+		) | rpl::filter([=](const Api::SendAction &action) {
+			return (action.history == _history)
+				&& (action.replyTo.topicRootId == _topic->topicRootId());
+		}) | rpl::start_with_next([=](const Api::SendAction &action) {
+			if (action.options.scheduled) {
+				_composeControls->cancelReplyMessage();
+				crl::on_main(this, [=, t = _topic] {
+					controller->showSection(
+						std::make_shared<HistoryView::ScheduledMemento>(t));
+				});
+			}
 		}, lifetime());
 	}
 
@@ -772,6 +805,14 @@ void RepliesWidget::setupComposeControls() {
 			data.direction == Direction::Next);
 	}, lifetime());
 
+	_composeControls->showScheduledRequests(
+	) | rpl::start_with_next([=] {
+		controller()->showSection(
+			_topic
+				? std::make_shared<HistoryView::ScheduledMemento>(_topic)
+				: std::make_shared<HistoryView::ScheduledMemento>(_history));
+	}, lifetime());
+
 	_composeControls->setMimeDataHook([=](
 			not_null<const QMimeData*> data,
 			Ui::InputField::MimeAction action) {
@@ -825,7 +866,7 @@ void RepliesWidget::chooseAttach(
 	}
 
 	const auto filter = (overrideSendImagesAsPhotos == true)
-		? FileDialog::ImagesOrAllFilter()
+		? FileDialog::PhotoVideoFilesFilter()
 		: FileDialog::AllOrImagesFilter();
 	FileDialog::GetOpenPaths(this, tr::lng_choose_files(tr::now), filter, crl::guard(this, [=](
 			FileDialog::OpenResult &&result) {
@@ -967,7 +1008,8 @@ void RepliesWidget::sendingFilesConfirmed(
 			album,
 			action);
 	}
-	if (_composeControls->replyingToMessage() == action.replyTo) {
+	if (_composeControls->replyingToMessage().messageId
+			== action.replyTo.messageId) {
 		_composeControls->cancelReplyMessage();
 		refreshTopBarActiveChat();
 	}
@@ -1170,29 +1212,29 @@ void RepliesWidget::edit(
 		return;
 	}
 	const auto webpage = _composeControls->webPageDraft();
-	auto sending = TextWithEntities();
-	auto left = _composeControls->prepareTextForEditMsg();
+	const auto sending = _composeControls->prepareTextForEditMsg();
 
-	const auto originalLeftSize = left.text.size();
 	const auto hasMediaWithCaption = item
 		&& item->media()
 		&& item->media()->allowsEditCaption();
-	const auto maxCaptionSize = !hasMediaWithCaption
-		? MaxMessageSize
-		: Data::PremiumLimits(&session()).captionLengthCurrent();
-	if (!TextUtilities::CutPart(sending, left, maxCaptionSize)
-		&& !hasMediaWithCaption) {
+	if (sending.text.isEmpty() && !hasMediaWithCaption) {
 		if (item) {
 			controller()->show(Box<DeleteMessagesBox>(item, false));
 		} else {
 			doSetInnerFocus();
 		}
 		return;
-	} else if (!left.text.isEmpty()) {
-		const auto remove = originalLeftSize - maxCaptionSize;
-		controller()->showToast(
-			tr::lng_edit_limit_reached(tr::now, lt_count, remove));
-		return;
+	} else {
+		const auto maxCaptionSize = !hasMediaWithCaption
+			? MaxMessageSize
+			: Data::PremiumLimits(&session()).captionLengthCurrent();
+		const auto remove = _composeControls->fieldCharacterCount()
+			- maxCaptionSize;
+		if (remove > 0) {
+			controller()->showToast(
+				tr::lng_edit_limit_reached(tr::now, lt_count, remove));
+			return;
+		}
 	}
 
 	lifetime().add([=] {

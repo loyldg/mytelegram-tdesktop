@@ -68,6 +68,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "api/api_who_reacted.h"
 #include "api/api_views.h"
 #include "lang/lang_keys.h"
+#include "data/components/sponsored_messages.h"
 #include "data/data_session.h"
 #include "data/data_document.h"
 #include "data/data_channel.h"
@@ -79,7 +80,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_file_click_handler.h"
 #include "data/data_histories.h"
 #include "data/data_changes.h"
-#include "data/data_sponsored_messages.h"
 #include "dialogs/ui/dialogs_video_userpic.h"
 #include "styles/style_chat.h"
 #include "styles/style_menu_icons.h"
@@ -118,7 +118,7 @@ void FillSponsoredMessagesMenu(
 		not_null<Window::SessionController*> controller,
 		FullMsgId itemId,
 		not_null<Ui::PopupMenu*> menu) {
-	const auto &data = controller->session().data().sponsoredMessages();
+	const auto &data = controller->session().sponsoredMessages();
 	const auto info = data.lookupDetails(itemId).info;
 	const auto show = controller->uiShow();
 	if (!info.empty()) {
@@ -158,7 +158,7 @@ void FillSponsoredMessagesMenu(
 		menu->addSeparator(&st::expandedMenuSeparator);
 	}
 	menu->addAction(tr::lng_sponsored_hide_ads(tr::now), [=] {
-		ShowPremiumPreviewBox(controller, PremiumPreview::NoAds);
+		ShowPremiumPreviewBox(controller, PremiumFeature::NoAds);
 	}, &st::menuIconCancel);
 }
 
@@ -979,7 +979,7 @@ void HistoryInner::paintEvent(QPaintEvent *e) {
 			: yShown(top + height / 2);
 		if (markShown) {
 			if (isSponsored) {
-				session().data().sponsoredMessages().view(item->fullId());
+				session().sponsoredMessages().view(item->fullId());
 			} else if (isUnread) {
 				readTill = item;
 			}
@@ -2129,7 +2129,17 @@ void HistoryInner::showContextMenu(QContextMenuEvent *e, bool showFromTouch) {
 		if (editItem) {
 			const auto editItemId = editItem->fullId();
 			_menu->addAction(tr::lng_context_edit_msg(tr::now), [=] {
-				_widget->editMessage(editItemId);
+				if (const auto item = session->data().message(editItemId)) {
+					auto it = _selected.find(item);
+					const auto selection = ((it != _selected.end())
+							&& (it->second != FullSelection))
+						? it->second
+						: TextSelection();
+					if (!selection.empty()) {
+						clearSelected(true);
+					}
+					_widget->editMessage(item, selection);
+				}
 			}, &st::menuIconEdit);
 		}
 		const auto pinItem = (item->canPin() && item->isPinned())
@@ -2264,6 +2274,87 @@ void HistoryInner::showContextMenu(QContextMenuEvent *e, bool showFromTouch) {
 					}
 				}
 			}, &st::menuIconSelect);
+			const auto collectBetween = [=](
+					not_null<HistoryItem*> from,
+					not_null<HistoryItem*> to,
+					int max) -> HistoryItemsList {
+				auto current = from;
+				auto collected = HistoryItemsList();
+				collected.reserve(max);
+				collected.push_back(from);
+				collected.push_back(to);
+				const auto toId = to->fullId();
+				while (true) {
+					if (collected.size() > max) {
+						return {};
+					}
+					const auto view = viewByItem(current);
+					const auto nextView = nextItem(view);
+					if (!nextView) {
+						return {};
+					}
+					const auto nextItem = nextView->data();
+					if (nextItem->fullId() == toId) {
+						return collected;
+					}
+					if (nextItem->isRegular() && !nextItem->isService()) {
+						collected.push_back(nextItem);
+					}
+					current = nextItem;
+				}
+			};
+
+			[&] { // Select up to this message.
+				if (selectedState.count <= 0) {
+					return;
+				}
+				const auto toItem = groupLeaderOrSelf(item);
+				auto topToBottom = false;
+				auto nearestItem = (HistoryItem*)(nullptr);
+				{
+					auto minDiff = std::numeric_limits<int>::max();
+					for (const auto &[item, _] : _selected) {
+						const auto diff = item->fullId().msg.bare
+							- toItem->fullId().msg.bare;
+						if (std::abs(diff) < minDiff) {
+							nearestItem = item;
+							minDiff = std::abs(diff);
+							topToBottom = (diff < 0);
+						}
+					}
+				}
+				if (!nearestItem) {
+					return;
+				}
+				const auto start = (topToBottom ? nearestItem : toItem);
+				const auto end = (topToBottom ? toItem : nearestItem);
+				const auto left = MaxSelectedItems
+					- selectedState.count
+					+ (topToBottom ? 0 : 1);
+				if (collectBetween(start, end, left).empty()) {
+					return;
+				}
+				const auto startId = start->fullId();
+				const auto endId = end->fullId();
+				const auto callback = [=] {
+					const auto from = session->data().message(startId);
+					const auto to = session->data().message(endId);
+					if (from && to) {
+						for (const auto &i : collectBetween(from, to, left)) {
+							changeSelectionAsGroup(
+								&_selected,
+								i,
+								SelectAction::Select);
+						}
+						update();
+						_widget->updateTopBarSelection();
+					}
+				};
+				_menu->addAction(
+					tr::lng_context_select_msg_bulk(tr::now),
+					callback,
+					&st::menuIconSelect);
+			}();
 		}
 	};
 
@@ -3981,7 +4072,7 @@ void HistoryInner::refreshAboutView() {
 					_history->delegateMixin()->delegate());
 			}
 			if (!info->inited) {
-				session().api().requestFullPeer(_peer);
+				session().api().requestFullPeer(user);
 			}
 		} else if (user->meRequiresPremiumToWrite()
 			&& !user->session().premium()
@@ -3991,8 +4082,14 @@ void HistoryInner::refreshAboutView() {
 					_history,
 					_history->delegateMixin()->delegate());
 			}
-		} else {
-			_aboutView = nullptr;
+		} else if (!historyHeight()) {
+			if (!user->isFullLoaded()) {
+				session().api().requestFullPeer(user);
+			} else if (!_aboutView) {
+				_aboutView = std::make_unique<HistoryView::AboutView>(
+					_history,
+					_history->delegateMixin()->delegate());
+			}
 		}
 	}
 }
