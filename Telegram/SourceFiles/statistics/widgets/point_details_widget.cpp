@@ -12,6 +12,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "lang/lang_keys.h"
 #include "statistics/statistics_common.h"
 #include "statistics/statistics_format_values.h"
+#include "statistics/statistics_graphics.h"
 #include "statistics/view/stack_linear_chart_common.h"
 #include "ui/cached_round_corners.h"
 #include "ui/effects/ripple_animation.h"
@@ -81,7 +82,7 @@ void PaintDetails(
 		line.name);
 	auto value = Ui::Text::String(
 		st::statisticsDetailsPopupStyle,
-		QString("%L1").arg(absoluteValue));
+		Lang::FormatCountDecimal(absoluteValue));
 	const auto nameWidth = name.maxWidth();
 	const auto valueWidth = value.maxWidth();
 
@@ -135,9 +136,7 @@ PointDetailsWidget::PointDetailsWidget(
 , _zoomEnabled(zoomEnabled)
 , _chartData(chartData)
 , _textStyle(st::statisticsDetailsPopupStyle)
-, _headerStyle(st::statisticsDetailsPopupHeaderStyle)
-, _valueIcon(chartData.currencyRate ? &st::statisticsCurrencyIcon : nullptr) {
-
+, _headerStyle(st::statisticsDetailsPopupHeaderStyle) {
 	if (zoomEnabled) {
 		rpl::single(rpl::empty_value()) | rpl::then(
 			style::PaletteChanged()
@@ -177,7 +176,7 @@ PointDetailsWidget::PointDetailsWidget(
 	const auto calculatedWidth = [&]{
 		const auto maxValueText = Ui::Text::String(
 			_textStyle,
-			QString("%L1").arg(maxAbsoluteValue));
+			Lang::FormatCountDecimal(maxAbsoluteValue));
 		const auto maxValueTextWidth = maxValueText.maxWidth();
 
 		auto maxNameTextWidth = 0;
@@ -205,7 +204,9 @@ PointDetailsWidget::PointDetailsWidget(
 			+ rect::m::sum::h(st::statisticsDetailsPopupPadding)
 			+ st::statisticsDetailsPopupPadding.left() // Between strings.
 			+ maxNameTextWidth
-			+ (_valueIcon ? _valueIcon->width() : 0)
+			+ (_valueIcon.isNull()
+				? 0
+				: _valueIcon.width() / style::DevicePixelRatio())
 			+ _maxPercentageWidth;
 	}();
 	sizeValue(
@@ -284,7 +285,7 @@ void PointDetailsWidget::setXIndex(int xIndex) {
 		textLine.name.setText(_textStyle, dataLine.name);
 		textLine.value.setText(
 			_textStyle,
-			QString("%L1").arg(dataLine.y[xIndex]));
+			Lang::FormatCountDecimal(dataLine.y[xIndex]));
 		hasPositiveValues |= (dataLine.y[xIndex] > 0);
 		textLine.valueColor = QColor(dataLine.color);
 		if (_chartData.currencyRate) {
@@ -309,6 +310,9 @@ void PointDetailsWidget::setXIndex(int xIndex) {
 					_chartData.currencyRate));
 		}
 		_lines.push_back(std::move(textLine));
+	}
+	if (_chartData.currencyRate && _valueIcon.isNull()) {
+		_valueIcon = ChartCurrencyIcon(_chartData, _lines.front().valueColor);
 	}
 	const auto clickable = _zoomEnabled && hasPositiveValues;
 	_hasPositiveValues = hasPositiveValues;
@@ -408,13 +412,12 @@ void PointDetailsWidget::paintEvent(QPaintEvent *e) {
 				.outerWidth = _textRect.width(),
 				.availableWidth = valueWidth,
 			};
-			if (!i && _valueIcon) {
-				_valueIcon->paint(
-					p,
-					valueContext.position.x() - _valueIcon->width(),
+			if (!i && !_valueIcon.isNull()) {
+				p.drawImage(
+					valueContext.position.x()
+						- _valueIcon.width() / style::DevicePixelRatio(),
 					lineY,
-					valueContext.outerWidth,
-					line.valueColor);
+					_valueIcon);
 			}
 			const auto nameContext = Ui::Text::PaintContext{
 				.position = QPoint(

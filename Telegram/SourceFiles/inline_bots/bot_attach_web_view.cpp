@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "api/api_blocked_peers.h"
 #include "api/api_common.h"
+#include "base/qthelp_url.h"
 #include "core/click_handler_types.h"
 #include "data/data_bot_app.h"
 #include "data/data_changes.h"
@@ -18,6 +19,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_document_media.h"
 #include "data/data_session.h"
 #include "data/data_web_page.h"
+#include "main/main_app_config.h"
 #include "main/main_session.h"
 #include "main/main_domain.h"
 #include "storage/storage_domain.h"
@@ -43,6 +45,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/history.h"
 #include "history/history_item.h"
 #include "payments/payments_checkout_process.h"
+#include "payments/payments_non_panel_process.h"
 #include "storage/storage_account.h"
 #include "boxes/peer_list_controllers.h"
 #include "lang/lang_keys.h"
@@ -603,7 +606,15 @@ void AttachWebView::botHandleInvoice(QString slug) {
 		}
 	};
 	_panel->hideForPayment();
-	Payments::CheckoutProcess::Start(&_bot->session(), slug, reactivate);
+	Payments::CheckoutProcess::Start(
+		&_bot->session(),
+		slug,
+		reactivate,
+		_context
+			? Payments::ProcessNonPanelPaymentFormFactory(
+				_context->controller.get(),
+				reactivate)
+			: nullptr);
 }
 
 void AttachWebView::botHandleMenuButton(Ui::BotWebView::MenuButton button) {
@@ -653,6 +664,19 @@ void AttachWebView::botHandleMenuButton(Ui::BotWebView::MenuButton button) {
 		}));
 		break;
 	}
+}
+
+bool AttachWebView::botValidateExternalLink(QString uri) {
+	const auto lower = uri.toLower();
+	const auto allowed = _session->appConfig().get<std::vector<QString>>(
+		"web_app_allowed_protocols",
+		std::vector{ u"http"_q, u"https"_q });
+	for (const auto &protocol : allowed) {
+		if (lower.startsWith(protocol + u"://"_q)) {
+			return true;
+		}
+	}
+	return false;
 }
 
 void AttachWebView::botOpenIvLink(QString uri) {
@@ -886,7 +910,7 @@ void AttachWebView::request(const WebViewButton &button) {
 		_requestId = 0;
 		const auto &data = result.data();
 		show(
-			data.vquery_id().v,
+			data.vquery_id().value_or_empty(),
 			qs(data.vurl()),
 			button.text,
 			button.fromAttachMenu || button.url.isEmpty());
@@ -1199,25 +1223,61 @@ void AttachWebView::requestSimple(const WebViewButton &button) {
 		MTP_string(button.startCommand),
 		MTP_dataJSON(MTP_bytes(Window::Theme::WebViewParams().json)),
 		MTP_string("tdesktop")
-	)).done([=](const MTPSimpleWebViewResult &result) {
+	)).done([=](const MTPWebViewResult &result) {
 		_requestId = 0;
-		result.match([&](const MTPDsimpleWebViewResultUrl &data) {
-			show(
-				uint64(),
-				qs(data.vurl()),
-				button.text,
-				false,
-				nullptr,
-				button.fromMainMenu);
-		});
+		const auto &data = result.data();
+		const auto queryId = uint64();
+		show(
+			queryId,
+			qs(data.vurl()),
+			button.text,
+			false,
+			nullptr,
+			button.fromMainMenu);
 	}).fail([=](const MTP::Error &error) {
 		_requestId = 0;
 	}).send();
 }
 
-void AttachWebView::requestMenu(
+bool AttachWebView::openAppFromMenuLink(
 		not_null<Window::SessionController*> controller,
 		not_null<UserData*> bot) {
+	Expects(bot->botInfo != nullptr);
+
+	const auto &url = bot->botInfo->botMenuButtonUrl;
+	const auto local = Core::TryConvertUrlToLocal(url);
+	const auto prefix = u"tg://resolve?"_q;
+	if (!local.startsWith(prefix)) {
+		return false;
+	}
+	const auto params = qthelp::url_parse_params(
+		local.mid(prefix.size()),
+		qthelp::UrlParamNameTransform::ToLower);
+	const auto domainParam = params.value(u"domain"_q);
+	const auto appnameParam = params.value(u"appname"_q);
+	const auto webChannelPreviewLink = (domainParam == u"s"_q)
+		&& !appnameParam.isEmpty();
+	const auto appname = webChannelPreviewLink ? QString() : appnameParam;
+	if (appname.isEmpty()) {
+		return false;
+	}
+	requestApp(
+		controller,
+		Api::SendAction(bot->owner().history(bot)),
+		bot,
+		appname,
+		params.value(u"startapp"_q),
+		true);
+	return true;
+}
+
+void AttachWebView::requestMenu(
+	not_null<Window::SessionController*> controller,
+		not_null<UserData*> bot) {
+	if (openAppFromMenuLink(controller, bot)) {
+		return;
+	}
+
 	cancel();
 	_bot = bot;
 	_context = std::make_unique<Context>(LookupContext(
@@ -1248,7 +1308,7 @@ void AttachWebView::requestMenu(
 		)).done([=](const MTPWebViewResult &result) {
 			_requestId = 0;
 			const auto &data = result.data();
-			show(data.vquery_id().v, qs(data.vurl()), text);
+			show(data.vquery_id().value_or_empty(), qs(data.vurl()), text);
 		}).fail([=](const MTP::Error &error) {
 			_requestId = 0;
 			if (error.type() == u"BOT_INVALID"_q) {
@@ -1371,7 +1431,7 @@ void AttachWebView::requestAppView(bool allowWrite) {
 		MTP_string(_startCommand),
 		MTP_dataJSON(MTP_bytes(Window::Theme::WebViewParams().json)),
 		MTP_string("tdesktop")
-	)).done([=](const MTPAppWebViewResult &result) {
+	)).done([=](const MTPWebViewResult &result) {
 		_requestId = 0;
 		const auto &data = result.data();
 		const auto queryId = uint64();
@@ -1703,7 +1763,7 @@ std::unique_ptr<Ui::DropdownMenu> MakeAttachBotsMenu(
 				flag,
 				flag,
 				source,
-				sendMenuType);
+				{ sendMenuType });
 		}, &st::menuIconCreatePoll);
 	}
 	for (const auto &bot : bots->attachBots()) {

@@ -22,6 +22,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "settings/settings_premium.h" // Settings::ShowPremium.
 #include "settings/settings_privacy_controllers.h"
 #include "settings/settings_websites.h"
+#include "base/system_unlock.h"
 #include "base/timer_rpl.h"
 #include "boxes/passcode_box.h"
 #include "boxes/sessions_box.h"
@@ -30,6 +31,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/application.h"
 #include "core/core_settings.h"
 #include "ui/chat/chat_style.h"
+#include "ui/effects/premium_graphics.h"
 #include "ui/effects/premium_top_bar.h"
 #include "ui/text/format_values.h"
 #include "ui/text/text_utilities.h"
@@ -79,7 +81,8 @@ using Privacy = Api::UserPrivacy;
 	image.fill(Qt::transparent);
 	{
 		auto p = QPainter(&image);
-		auto star = QSvgRenderer(Ui::Premium::ColorizedSvg());
+		auto star = QSvgRenderer(
+			Ui::Premium::ColorizedSvg(Ui::Premium::ButtonGradientStops()));
 		star.render(&p, Rect(size));
 	}
 	return image;
@@ -1077,6 +1080,8 @@ PrivacySecurity::PrivacySecurity(
 	not_null<Window::SessionController*> controller)
 : Section(parent) {
 	setupContent(controller);
+
+	[[maybe_unused]] auto preload = base::SystemUnlockStatus();
 }
 
 rpl::producer<QString> PrivacySecurity::title() {

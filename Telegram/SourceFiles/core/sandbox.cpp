@@ -255,7 +255,10 @@ void Sandbox::setupScreenScale() {
 Sandbox::~Sandbox() = default;
 
 bool Sandbox::event(QEvent *e) {
-	if (e->type() == QEvent::Quit && !Quitting()) {
+	if (e->type() == QEvent::Quit) {
+		if (Quitting()) {
+			return QCoreApplication::event(e);
+		}
 		Quit(QuitReason::QtQuitEvent);
 		e->ignore();
 		return false;
@@ -617,7 +620,7 @@ void Sandbox::processPostponedCalls(int level) {
 bool Sandbox::nativeEventFilter(
 		const QByteArray &eventType,
 		void *message,
-		base::NativeEventResult *result) {
+		native_event_filter_result *result) {
 	registerEnterFromEventLoop();
 	return false;
 }

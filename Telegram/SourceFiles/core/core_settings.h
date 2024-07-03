@@ -614,9 +614,15 @@ public:
 	[[nodiscard]] RectPart floatPlayerCorner() const {
 		return _floatPlayerCorner;
 	}
-	void setDialogsWidthRatio(float64 ratio);
-	[[nodiscard]] float64 dialogsWidthRatio() const;
-	[[nodiscard]] rpl::producer<float64> dialogsWidthRatioChanges() const;
+
+	void updateDialogsWidthRatio(float64 ratio, bool nochat);
+	[[nodiscard]] float64 dialogsWidthRatio(bool nochat) const;
+
+	[[nodiscard]] float64 dialogsWithChatWidthRatio() const;
+	[[nodiscard]] rpl::producer<float64> dialogsWithChatWidthRatioChanges() const;
+	[[nodiscard]] float64 dialogsNoChatWidthRatio() const;
+	[[nodiscard]] rpl::producer<float64> dialogsNoChatWidthRatioChanges() const;
+
 	void setThirdColumnWidth(int width);
 	[[nodiscard]] int thirdColumnWidth() const;
 	[[nodiscard]] rpl::producer<int> thirdColumnWidthChanges() const;
@@ -878,6 +884,13 @@ public:
 		_customFontFamily = value;
 	}
 
+	[[nodiscard]] bool systemUnlockEnabled() const {
+		return _systemUnlockEnabled;
+	}
+	void setSystemUnlockEnabled(bool enabled) {
+		_systemUnlockEnabled = enabled;
+	}
+
 	[[nodiscard]] static bool ThirdColumnByDefault();
 	[[nodiscard]] static float64 DefaultDialogsWidthRatio();
 
@@ -969,7 +982,8 @@ private:
 	bool _thirdSectionInfoEnabled = true; // per-window
 	rpl::event_stream<bool> _thirdSectionInfoEnabledValue; // per-window
 	int _thirdSectionExtendedBy = -1; // per-window
-	rpl::variable<float64> _dialogsWidthRatio; // per-window
+	rpl::variable<float64> _dialogsWithChatWidthRatio; // per-window
+	rpl::variable<float64> _dialogsNoChatWidthRatio; // per-window
 	rpl::variable<int> _thirdColumnWidth = kDefaultThirdColumnWidth; // p-w
 	bool _notifyFromAll = true;
 	rpl::variable<bool> _nativeWindowFrame = false;
@@ -1007,6 +1021,7 @@ private:
 	rpl::variable<bool> _ttlVoiceClickTooltipHidden = false;
 	WindowPosition _ivPosition;
 	QString _customFontFamily;
+	bool _systemUnlockEnabled = false;
 
 	bool _tabbedReplacedWithInfo = false; // per-window
 	rpl::event_stream<bool> _tabbedReplacedWithInfoValue; // per-window
@@ -1015,6 +1030,7 @@ private:
 	float64 _rememberedSongVolume = kDefaultVolume;
 	bool _rememberedSoundNotifyFromTray = false;
 	bool _rememberedFlashBounceNotifyFromTray = false;
+	bool _dialogsWidthSetToZeroWithoutChat = false;
 
 	QByteArray _photoEditorBrush;
 

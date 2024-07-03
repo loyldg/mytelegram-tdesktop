@@ -120,10 +120,13 @@ PRIVATE
     api/api_common.h
     api/api_confirm_phone.cpp
     api/api_confirm_phone.h
+    api/api_credits.cpp
+    api/api_credits.h
     api/api_earn.cpp
     api/api_earn.h
     api/api_editing.cpp
     api/api_editing.h
+    api/api_filter_updates.h
     api/api_global_privacy.cpp
     api/api_global_privacy.h
     api/api_hash.cpp
@@ -162,6 +165,10 @@ PRIVATE
     api/api_single_message_search.h
     api/api_statistics.cpp
     api/api_statistics.h
+    api/api_statistics_data_deserialize.cpp
+    api/api_statistics_data_deserialize.h
+    api/api_statistics_sender.cpp
+    api/api_statistics_sender.h
     api/api_text_entities.cpp
     api/api_text_entities.h
     api/api_toggling_media.cpp
@@ -299,6 +306,8 @@ PRIVATE
     boxes/ringtones_box.h
     boxes/self_destruction_box.cpp
     boxes/self_destruction_box.h
+    boxes/send_credits_box.cpp
+    boxes/send_credits_box.h
     boxes/send_files_box.cpp
     boxes/send_files_box.h
     boxes/sessions_box.cpp
@@ -441,6 +450,8 @@ PRIVATE
     core/launcher.h
     core/local_url_handlers.cpp
     core/local_url_handlers.h
+    core/phone_click_handler.cpp
+    core/phone_click_handler.h
     core/sandbox.cpp
     core/sandbox.h
     core/shortcuts.cpp
@@ -462,6 +473,8 @@ PRIVATE
     data/business/data_business_info.h
     data/business/data_shortcut_messages.cpp
     data/business/data_shortcut_messages.h
+    data/components/factchecks.cpp
+    data/components/factchecks.h
     data/components/recent_peers.cpp
     data/components/recent_peers.h
     data/components/scheduled_messages.cpp
@@ -539,6 +552,8 @@ PRIVATE
     data/data_groups.h
     data/data_histories.cpp
     data/data_histories.h
+    data/data_history_messages.cpp
+    data/data_history_messages.h
     data/data_lastseen_status.h
     data/data_location.cpp
     data/data_location.h
@@ -712,8 +727,6 @@ PRIVATE
     history/view/media/history_view_dice.h
     history/view/media/history_view_document.cpp
     history/view/media/history_view_document.h
-    history/view/media/history_view_extended_preview.cpp
-    history/view/media/history_view_extended_preview.h
     history/view/media/history_view_file.cpp
     history/view/media/history_view_file.h
     history/view/media/history_view_game.cpp
@@ -781,6 +794,8 @@ PRIVATE
     history/view/history_view_about_view.h
     history/view/history_view_bottom_info.cpp
     history/view/history_view_bottom_info.h
+    history/view/history_view_chat_preview.cpp
+    history/view/history_view_chat_preview.h
     history/view/history_view_contact_status.cpp
     history/view/history_view_contact_status.h
     history/view/history_view_context_menu.cpp
@@ -795,6 +810,8 @@ PRIVATE
     history/view/history_view_emoji_interactions.h
     history/view/history_view_empty_list_bubble.cpp
     history/view/history_view_empty_list_bubble.h
+    history/view/history_view_fake_items.cpp
+    history/view/history_view_fake_items.h
     history/view/history_view_group_call_bar.cpp
     history/view/history_view_group_call_bar.h
     history/view/history_view_item_preview.h
@@ -825,14 +842,14 @@ PRIVATE
     history/view/history_view_send_action.h
     history/view/history_view_service_message.cpp
     history/view/history_view_service_message.h
-    history/view/history_view_spoiler_click_handler.cpp
-    history/view/history_view_spoiler_click_handler.h
     history/view/history_view_sponsored_click_handler.cpp
     history/view/history_view_sponsored_click_handler.h
     history/view/history_view_sticker_toast.cpp
     history/view/history_view_sticker_toast.h
     history/view/history_view_sublist_section.cpp
     history/view/history_view_sublist_section.h
+    history/view/history_view_text_helper.cpp
+    history/view/history_view_text_helper.h
     history/view/history_view_transcribe_button.cpp
     history/view/history_view_transcribe_button.h
     history/view/history_view_translate_bar.cpp
@@ -873,6 +890,10 @@ PRIVATE
     history/history_view_highlight_manager.h
     history/history_widget.cpp
     history/history_widget.h
+    info/bot/earn/info_bot_earn_list.cpp
+    info/bot/earn/info_bot_earn_list.h
+    info/bot/earn/info_bot_earn_widget.cpp
+    info/bot/earn/info_bot_earn_widget.h
     info/channel_statistics/boosts/create_giveaway_box.cpp
     info/channel_statistics/boosts/create_giveaway_box.h
     info/channel_statistics/boosts/giveaway/giveaway_list_controllers.cpp
@@ -881,10 +902,10 @@ PRIVATE
     info/channel_statistics/boosts/info_boosts_inner_widget.h
     info/channel_statistics/boosts/info_boosts_widget.cpp
     info/channel_statistics/boosts/info_boosts_widget.h
-    info/channel_statistics/earn/info_earn_inner_widget.cpp
-    info/channel_statistics/earn/info_earn_inner_widget.h
-    info/channel_statistics/earn/info_earn_widget.cpp
-    info/channel_statistics/earn/info_earn_widget.h
+    info/channel_statistics/earn/info_channel_earn_list.cpp
+    info/channel_statistics/earn/info_channel_earn_list.h
+    info/channel_statistics/earn/info_channel_earn_widget.cpp
+    info/channel_statistics/earn/info_channel_earn_widget.h
     info/common_groups/info_common_groups_inner_widget.cpp
     info/common_groups/info_common_groups_inner_widget.h
     info/common_groups/info_common_groups_widget.cpp
@@ -1209,6 +1230,8 @@ PRIVATE
     payments/payments_checkout_process.h
     payments/payments_form.cpp
     payments/payments_form.h
+    payments/payments_non_panel_process.cpp
+    payments/payments_non_panel_process.h
     platform/linux/file_utilities_linux.cpp
     platform/linux/file_utilities_linux.h
     platform/linux/launcher_linux.cpp
@@ -1354,6 +1377,10 @@ PRIVATE
     settings/settings_codes.h
     settings/settings_common_session.cpp
     settings/settings_common_session.h
+    settings/settings_credits.cpp
+    settings/settings_credits.h
+    settings/settings_credits_graphics.cpp
+    settings/settings_credits_graphics.h
     settings/settings_experimental.cpp
     settings/settings_experimental.h
     settings/settings_folders.cpp
@@ -1449,6 +1476,8 @@ PRIVATE
     ui/controls/silent_toggle.h
     ui/controls/userpic_button.cpp
     ui/controls/userpic_button.h
+    ui/effects/credits_graphics.cpp
+    ui/effects/credits_graphics.h
     ui/effects/emoji_fly_animation.cpp
     ui/effects/emoji_fly_animation.h
     ui/effects/message_sending_animation_common.h
@@ -1496,6 +1525,8 @@ PRIVATE
     window/section_widget.h
     window/window_adaptive.cpp
     window/window_adaptive.h
+    window/window_chat_preview.cpp
+    window/window_chat_preview.h
     window/window_connecting_widget.cpp
     window/window_connecting_widget.h
     window/window_controller.cpp
@@ -1515,6 +1546,8 @@ PRIVATE
     window/window_peer_menu.cpp
     window/window_peer_menu.h
     window/window_section_common.h
+    window/window_separate_id.cpp
+    window/window_separate_id.h
     window/window_session_controller.cpp
     window/window_session_controller.h
     window/window_session_controller_link_info.h
@@ -1804,12 +1837,44 @@ if (WIN32)
         /DELAYLOAD:uxtheme.dll
         /DELAYLOAD:crypt32.dll
         /DELAYLOAD:bcrypt.dll
-        /DELAYLOAD:imm32.dll
         /DELAYLOAD:netapi32.dll
+        /DELAYLOAD:imm32.dll
         /DELAYLOAD:userenv.dll
         /DELAYLOAD:wtsapi32.dll
         /DELAYLOAD:propsys.dll
     )
+    if (QT_VERSION GREATER 6)
+        target_link_options(Telegram
+        PRIVATE
+            /DELAYLOAD:API-MS-Win-EventLog-Legacy-l1-1-0.dll
+            /DELAYLOAD:API-MS-Win-Core-Console-l1-1-0.dll
+            /DELAYLOAD:API-MS-Win-Core-Fibers-l2-1-0.dll
+            /DELAYLOAD:API-MS-Win-Core-Fibers-l2-1-1.dll
+            /DELAYLOAD:API-MS-Win-Core-File-l1-1-0.dll
+            /DELAYLOAD:API-MS-Win-Core-LibraryLoader-l1-2-0.dll
+            /DELAYLOAD:API-MS-Win-Core-Localization-l1-2-0.dll
+            /DELAYLOAD:API-MS-Win-Core-Memory-l1-1-0.dll
+            /DELAYLOAD:API-MS-Win-Core-Memory-l1-1-1.dll
+            /DELAYLOAD:API-MS-Win-Core-ProcessThreads-l1-1-0.dll
+            /DELAYLOAD:API-MS-Win-Core-Synch-l1-2-0.dll # Synchronization.lib
+            /DELAYLOAD:API-MS-Win-Core-SysInfo-l1-1-0.dll
+            /DELAYLOAD:API-MS-Win-Core-Timezone-l1-1-0.dll
+            /DELAYLOAD:API-MS-Win-Core-WinRT-l1-1-0.dll
+            /DELAYLOAD:API-MS-Win-Core-WinRT-Error-l1-1-0.dll
+            /DELAYLOAD:API-MS-Win-Core-WinRT-String-l1-1-0.dll
+            /DELAYLOAD:API-MS-Win-Security-CryptoAPI-l1-1-0.dll
+            /DELAYLOAD:API-MS-Win-Shcore-Scaling-l1-1-1.dll
+            /DELAYLOAD:authz.dll # Authz.lib
+            /DELAYLOAD:comdlg32.dll
+            /DELAYLOAD:dwrite.dll # DWrite.lib
+            /DELAYLOAD:dxgi.dll # DXGI.lib
+            /DELAYLOAD:d3d9.dll # D3D9.lib
+            /DELAYLOAD:d3d11.dll # D3D11.lib
+            /DELAYLOAD:d3d12.dll # D3D12.lib
+            /DELAYLOAD:setupapi.dll # SetupAPI.lib
+            /DELAYLOAD:winhttp.dll
+        )
+    endif()
 endif()
 
 target_prepare_qrc(Telegram)

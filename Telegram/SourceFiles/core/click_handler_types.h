@@ -47,10 +47,13 @@ struct ClickHandlerContext {
 	bool skipBotAutoLogin = false;
 	bool botStartAutoSubmit = false;
 	bool ignoreIv = false;
+	bool dark = false;
 	// Is filled from peer info.
 	PeerData *peer = nullptr;
 };
 Q_DECLARE_METATYPE(ClickHandlerContext);
+
+class PhoneClickHandler;
 
 class HiddenUrlClickHandler : public UrlClickHandler {
 public:

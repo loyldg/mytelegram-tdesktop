@@ -7,12 +7,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-namespace HistoryView {
+namespace Data {
+struct StatisticalGraph;
+} // namespace Data
 
-class Element;
+namespace Api {
 
-void FillTextWithAnimatedSpoilers(
-	not_null<Element*> view,
-	Ui::Text::String &text);
+[[nodiscard]] Data::StatisticalGraph StatisticalGraphFromTL(
+	const MTPStatsGraph &tl);
 
-} // namespace HistoryView
+} // namespace Api

@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "history/view/media/history_view_photo.h"
 
+#include "boxes/send_credits_box.h"
 #include "history/history_item_components.h"
 #include "history/history_item.h"
 #include "history/history.h"
@@ -14,6 +15,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/view/history_view_cursor_state.h"
 #include "history/view/media/history_view_media_common.h"
 #include "history/view/media/history_view_media_spoiler.h"
+#include "lang/lang_keys.h"
 #include "media/streaming/media_streaming_instance.h"
 #include "media/streaming/media_streaming_player.h"
 #include "media/streaming/media_streaming_document.h"
@@ -23,6 +25,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/image/image.h"
 #include "ui/effects/spoiler_mess.h"
 #include "ui/chat/chat_style.h"
+#include "ui/text/text_utilities.h"
 #include "ui/grouped_layout.h"
 #include "ui/cached_round_corners.h"
 #include "ui/painter.h"
@@ -37,7 +40,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_auto_download.h"
 #include "data/data_web_page.h"
 #include "core/application.h"
+#include "core/ui_integration.h"
 #include "styles/style_chat.h"
+#include "styles/style_chat_helpers.h"
 
 namespace HistoryView {
 namespace {
@@ -58,6 +63,15 @@ struct Photo::Streamed {
 	QImage roundingMask;
 };
 
+struct Photo::PriceTag {
+	uint64 price = 0;
+	QImage cache;
+	QColor darken;
+	QColor fg;
+	QColor star;
+	ClickHandlerPtr link;
+};
+
 Photo::Streamed::Streamed(
 	std::shared_ptr<::Media::Streaming::Document> shared)
 : instance(std::move(shared), nullptr) {
@@ -73,9 +87,7 @@ Photo::Photo(
 , _storyId(realParent->media()
 	? realParent->media()->storyId()
 	: FullStoryId())
-, _caption(st::minPhotoSize - st::msgPadding.left() - st::msgPadding.right())
 , _spoiler(spoiler ? std::make_unique<MediaSpoiler>() : nullptr) {
-	_caption = createCaption(realParent);
 	create(realParent->fullId());
 }
 
@@ -127,6 +139,7 @@ void Photo::create(FullMsgId contextId, PeerData *chat) {
 	if (_spoiler) {
 		createSpoilerLink(_spoiler.get());
 	}
+	_purchasedPriceTag = hasPurchasedTag() ? 1 : 0;
 }
 
 void Photo::ensureDataMediaCreated() const {
@@ -142,7 +155,8 @@ void Photo::dataMediaCreated() const {
 
 	if (_data->inlineThumbnailBytes().isEmpty()
 		&& !_dataMedia->image(PhotoSize::Large)
-		&& !_dataMedia->image(PhotoSize::Thumbnail)) {
+		&& !_dataMedia->image(PhotoSize::Thumbnail)
+		&& !_data->extendedMediaPreview()) {
 		_dataMedia->wanted(PhotoSize::Small, _realParent->fullId());
 	}
 	history()->owner().registerHeavyViewPart(_parent);
@@ -161,8 +175,11 @@ void Photo::unloadHeavyPart() {
 		_spoiler->animation = nullptr;
 	}
 	_imageCache = QImage();
-	_caption.unloadPersistentAnimation();
 	togglePollingStory(false);
+}
+
+bool Photo::enforceBubbleWidth() const {
+	return true;
 }
 
 void Photo::togglePollingStory(bool enabled) const {
@@ -184,15 +201,6 @@ QSize Photo::countOptimalSize() {
 	if (_serviceWidth > 0) {
 		return { int(_serviceWidth), int(_serviceWidth) };
 	}
-
-	if (_parent->media() != this) {
-		_caption = Ui::Text::String();
-	} else if (_caption.hasSkipBlock()) {
-		_caption.updateSkipBlock(
-			_parent->skipBlockWidth(),
-			_parent->skipBlockHeight());
-	}
-
 	const auto dimensions = photoSize();
 	const auto scaled = CountDesiredMediaSize(dimensions);
 	const auto minWidth = std::clamp(
@@ -204,23 +212,13 @@ QSize Photo::countOptimalSize() {
 	const auto maxActualWidth = qMax(scaled.width(), minWidth);
 	auto maxWidth = qMax(maxActualWidth, scaled.height());
 	auto minHeight = qMax(scaled.height(), st::minPhotoSize);
-	if (_parent->hasBubble() && !_caption.isEmpty()) {
-		maxWidth = qMax(
-			maxWidth,
-			(st::msgPadding.left()
-				+ _caption.maxWidth()
-				+ st::msgPadding.right()));
+	if (_parent->hasBubble()) {
+		const auto captionMaxWidth = _parent->textualMaxWidth();
+		const auto maxWithCaption = qMin(st::msgMaxWidth, captionMaxWidth);
+		maxWidth = qMin(qMax(maxWidth, maxWithCaption), st::msgMaxWidth);
 		minHeight = adjustHeightForLessCrop(
 			dimensions,
 			{ maxWidth, minHeight });
-		if (const auto botTop = _parent->Get<FakeBotAboutTop>()) {
-			accumulate_max(maxWidth, botTop->maxWidth);
-			minHeight += botTop->height;
-		}
-		minHeight += st::mediaCaptionSkip + _caption.minHeight();
-		if (isBubbleBottom()) {
-			minHeight += st::msgPadding.bottom();
-		}
 	}
 	return { maxWidth, minHeight };
 }
@@ -237,36 +235,30 @@ QSize Photo::countCurrentSize(int newWidth) {
 			: st::minPhotoSize),
 		thumbMaxWidth);
 	const auto dimensions = photoSize();
-	auto pix = CountPhotoMediaSize(
-		CountDesiredMediaSize(dimensions),
-		newWidth,
-		maxWidth());
+	auto pix = _data->extendedMediaVideoDuration()
+		? CountMediaSize(
+			CountDesiredMediaSize(dimensions),
+			newWidth)
+		: CountPhotoMediaSize(
+			CountDesiredMediaSize(dimensions),
+			newWidth,
+			maxWidth());
 	newWidth = qMax(pix.width(), minWidth);
 	auto newHeight = qMax(pix.height(), st::minPhotoSize);
-	auto imageHeight = newHeight;
-	if (_parent->hasBubble() && !_caption.isEmpty()) {
-		auto captionMaxWidth = st::msgPadding.left()
-			+ _caption.maxWidth()
-			+ st::msgPadding.right();
+	if (_parent->hasBubble()) {
+		auto captionMaxWidth = _parent->textualMaxWidth();
 		const auto botTop = _parent->Get<FakeBotAboutTop>();
 		if (botTop) {
 			accumulate_max(captionMaxWidth, botTop->maxWidth);
 		}
 		const auto maxWithCaption = qMin(st::msgMaxWidth, captionMaxWidth);
 		newWidth = qMin(qMax(newWidth, maxWithCaption), thumbMaxWidth);
-		imageHeight = newHeight = adjustHeightForLessCrop(
+		newHeight = adjustHeightForLessCrop(
 			dimensions,
 			{ newWidth, newHeight });
-		const auto captionw = newWidth
-			- st::msgPadding.left()
-			- st::msgPadding.right();
-		if (botTop) {
-			newHeight += botTop->height;
-		}
-		newHeight += st::mediaCaptionSkip + _caption.countHeight(captionw);
-		if (isBubbleBottom()) {
-			newHeight += st::msgPadding.bottom();
-		}
+	}
+	if (newWidth >= maxWidth()) {
+		newHeight = qMin(newHeight, minHeight());
 	}
 	const auto enlargeInner = st::historyPageEnlargeSize;
 	const auto enlargeOuter = 2 * st::historyPageEnlargeSkip + enlargeInner;
@@ -275,7 +267,7 @@ QSize Photo::countCurrentSize(int newWidth) {
 		&& _parent->data()->media()->webpage()
 		&& _parent->data()->media()->webpage()->suggestEnlargePhoto()
 		&& (newWidth >= enlargeOuter)
-		&& (imageHeight >= enlargeOuter);
+		&& (newHeight >= enlargeOuter);
 	_showEnlarge = showEnlarge ? 1 : 0;
 	return { newWidth, newHeight };
 }
@@ -301,15 +293,13 @@ void Photo::draw(Painter &p, const PaintContext &context) const {
 	_dataMedia->automaticLoad(_realParent->fullId(), _parent->data());
 	const auto st = context.st;
 	const auto sti = context.imageStyle();
-	const auto stm = context.messageStyle();
-	auto loaded = _dataMedia->loaded();
-	auto displayLoading = _data->displayLoading();
+	const auto preview = _data->extendedMediaPreview();
+	const auto loaded = preview || _dataMedia->loaded();
+	const auto displayLoading = !preview && _data->displayLoading();
 
 	auto inWebPage = (_parent->media() != this);
 	auto paintx = 0, painty = 0, paintw = width(), painth = height();
 	auto bubble = _parent->hasBubble();
-
-	auto captionw = paintw - st::msgPadding.left() - st::msgPadding.right();
 
 	if (displayLoading) {
 		ensureAnimation();
@@ -318,7 +308,6 @@ void Photo::draw(Painter &p, const PaintContext &context) const {
 		}
 	}
 	const auto radial = isRadialAnimation();
-	const auto botTop = _parent->Get<FakeBotAboutTop>();
 
 	auto rthumb = style::rtlrect(paintx, painty, paintw, painth, width());
 	if (_serviceWidth > 0) {
@@ -326,19 +315,8 @@ void Photo::draw(Painter &p, const PaintContext &context) const {
 	} else {
 		const auto rounding = inWebPage
 			? std::optional<Ui::BubbleRounding>()
-			: adjustedBubbleRoundingWithCaption(_caption);
-		if (bubble) {
-			if (!_caption.isEmpty()) {
-				painth -= st::mediaCaptionSkip + _caption.countHeight(captionw);
-				if (botTop) {
-					painth -= botTop->height;
-				}
-				if (isBubbleBottom()) {
-					painth -= st::msgPadding.bottom();
-				}
-				rthumb = style::rtlrect(paintx, painty, paintw, painth, width());
-			}
-		} else {
+			: adjustedBubbleRounding();
+		if (!bubble) {
 			Assert(rounding.has_value());
 			fillImageShadow(p, rthumb, *rounding, context);
 		}
@@ -404,6 +382,10 @@ void Photo::draw(Painter &p, const PaintContext &context) const {
 			QRect rinner(inner.marginsRemoved(QMargins(st::msgFileRadialLine, st::msgFileRadialLine, st::msgFileRadialLine, st::msgFileRadialLine)));
 			_animation->radial.draw(p, rinner, st::msgFileRadialLine, sti->historyFileThumbRadialFg);
 		}
+	} else if (preview) {
+		drawPriceTag(p, rthumb, context, [&] {
+			return priceTagBackground();
+		});
 	}
 	if (showEnlarge) {
 		auto hq = PainterHighQualityEnabler(p);
@@ -412,37 +394,17 @@ void Photo::draw(Painter &p, const PaintContext &context) const {
 		p.drawRoundedRect(rect, radius, radius);
 		sti->historyPageEnlarge.paintInCenter(p, rect);
 	}
+	if (_purchasedPriceTag) {
+		auto geometry = rthumb;
+		if (showEnlarge) {
+			const auto rect = enlargeRect();
+			geometry.setY(rect.y() + rect.height());
+		}
+		drawPurchasedTag(p, geometry, context);
+	}
 
 	// date
-	if (!_caption.isEmpty()) {
-		p.setPen(stm->historyTextFg);
-		_parent->prepareCustomEmojiPaint(p, context, _caption);
-		auto top = painty + painth + st::mediaCaptionSkip;
-		if (botTop) {
-			botTop->text.drawLeftElided(
-				p,
-				st::msgPadding.left(),
-				top,
-				captionw,
-				_parent->width());
-			top += botTop->height;
-		}
-		auto highlightRequest = context.computeHighlightCache();
-		_caption.draw(p, {
-			.position = QPoint(st::msgPadding.left(), top),
-			.availableWidth = captionw,
-			.palette = &stm->textPalette,
-			.pre = stm->preCache.get(),
-			.blockquote = context.quoteCache(parent()->contentColorIndex()),
-			.colors = context.st->highlightColors(),
-			.spoiler = Ui::Text::DefaultSpoilerCache(),
-			.now = context.now,
-			.pausedEmoji = context.paused || On(PowerSaving::kEmojiChat),
-			.pausedSpoiler = context.paused || On(PowerSaving::kChatSpoiler),
-			.selection = context.selection,
-			.highlight = highlightRequest ? &*highlightRequest : nullptr,
-		});
-	} else if (!inWebPage) {
+	if (!inWebPage && (!bubble || isBubbleBottom())) {
 		auto fullRight = paintx + paintw;
 		auto fullBottom = painty + painth;
 		if (needInfoDisplay()) {
@@ -461,6 +423,107 @@ void Photo::draw(Painter &p, const PaintContext &context) const {
 			auto fastShareTop = (fullBottom - st::historyFastShareBottom - size->height());
 			_parent->drawRightAction(p, context, fastShareLeft, fastShareTop, 2 * paintx + paintw);
 		}
+	}
+}
+
+void Photo::setupPriceTag() const {
+	const auto media = parent()->data()->media();
+	const auto invoice = media ? media->invoice() : nullptr;
+	const auto price = invoice->isPaidMedia ? invoice->amount : 0;
+	if (!price) {
+		return;
+	}
+	_priceTag = std::make_unique<PriceTag>();
+	_priceTag->price = price;
+}
+
+void Photo::drawPriceTag(
+		Painter &p,
+		QRect rthumb,
+		const PaintContext &context,
+		Fn<QImage()> generateBackground) const {
+	if (!_priceTag) {
+		setupPriceTag();
+		if (!_priceTag) {
+			return;
+		}
+	}
+	const auto st = context.st;
+	const auto darken = st->msgDateImgBg()->c;
+	const auto fg = st->msgDateImgFg()->c;
+	const auto star = st->creditsBg1()->c;
+	if (_priceTag->cache.isNull()
+		|| _priceTag->darken != darken
+		|| _priceTag->fg != fg
+		|| _priceTag->star != star) {
+		const auto ratio = style::DevicePixelRatio();
+		auto bg = generateBackground();
+		if (bg.isNull()) {
+			bg = QImage(ratio, ratio, QImage::Format_ARGB32_Premultiplied);
+			bg.fill(Qt::black);
+		}
+
+		auto text = Ui::Text::String();
+		const auto session = &history()->session();
+		auto price = Ui::Text::Colorized(Ui::CreditsEmoji(session));
+		price.append(Lang::FormatCountDecimal(_priceTag->price));
+		text.setMarkedText(
+			st::semiboldTextStyle,
+			tr::lng_paid_price(
+				tr::now,
+				lt_price,
+				price,
+				Ui::Text::WithEntities),
+			kMarkupTextOptions,
+			Core::MarkedTextContext{
+				.session = session,
+				.customEmojiRepaint = [] {},
+			});
+		const auto width = text.maxWidth();
+		const auto inner = QRect(0, 0, width, text.minHeight());
+		const auto outer = inner.marginsAdded(st::paidTagPadding);
+		const auto size = outer.size();
+		const auto radius = std::min(size.width(), size.height()) / 2;
+		auto cache = QImage(
+			size * ratio,
+			QImage::Format_ARGB32_Premultiplied);
+		cache.setDevicePixelRatio(ratio);
+		cache.fill(Qt::black);
+		auto p = Painter(&cache);
+		auto hq = PainterHighQualityEnabler(p);
+		p.drawImage(
+			QRect(
+				(size.width() - rthumb.width()) / 2,
+				(size.height() - rthumb.height()) / 2,
+				rthumb.width(),
+				rthumb.height()),
+			bg);
+		p.fillRect(QRect(QPoint(), size), darken);
+		p.setPen(fg);
+		p.setTextPalette(st->priceTagTextPalette());
+		text.draw(p, -outer.x(), -outer.y(), width);
+		p.end();
+
+		_priceTag->darken = darken;
+		_priceTag->fg = fg;
+		_priceTag->cache = Images::Round(
+			std::move(cache),
+			Images::CornersMask(radius));
+	}
+	const auto &cache = _priceTag->cache;
+	const auto size = cache.size() / cache.devicePixelRatio();
+	const auto left = rthumb.x() + (rthumb.width() - size.width()) / 2;
+	const auto top = rthumb.y() + (rthumb.height() - size.height()) / 2;
+	p.drawImage(left, top, cache);
+	if (context.selected()) {
+		auto hq = PainterHighQualityEnabler(p);
+		const auto radius = std::min(size.width(), size.height()) / 2;
+		p.setPen(Qt::NoPen);
+		p.setBrush(st->msgSelectOverlay());
+		p.drawRoundedRect(
+			QRect(left, top, size.width(), size.height()),
+			radius,
+			radius);
 	}
 }
 
@@ -671,6 +734,26 @@ QRect Photo::enlargeRect() const {
 	};
 }
 
+ClickHandlerPtr Photo::priceTagLink() const {
+	const auto item = parent()->data();
+	if (!item->isRegular()) {
+		return nullptr;
+	} else if (!_priceTag) {
+		setupPriceTag();
+		if (!_priceTag) {
+			return nullptr;
+		}
+	}
+	if (!_priceTag->link) {
+		_priceTag->link = MakePaidMediaLink(item);
+	}
+	return _priceTag->link;
+}
+
+QImage Photo::priceTagBackground() const {
+	return _spoiler ? _spoiler->background : QImage();
+}
+
 TextState Photo::textState(QPoint point, StateRequest request) const {
 	auto result = TextState(_parent);
 
@@ -682,29 +765,11 @@ TextState Photo::textState(QPoint point, StateRequest request) const {
 	auto paintx = 0, painty = 0, paintw = width(), painth = height();
 	auto bubble = _parent->hasBubble();
 
-	if (bubble && !_caption.isEmpty()) {
-		const auto captionw = paintw
-			- st::msgPadding.left()
-			- st::msgPadding.right();
-		painth -= _caption.countHeight(captionw);
-		if (isBubbleBottom()) {
-			painth -= st::msgPadding.bottom();
-		}
-		if (QRect(st::msgPadding.left(), painth, captionw, height() - painth).contains(point)) {
-			result = TextState(_parent, _caption.getState(
-				point - QPoint(st::msgPadding.left(), painth),
-				captionw,
-				request.forText()));
-			return result;
-		}
-		if (const auto botTop = _parent->Get<FakeBotAboutTop>()) {
-			painth -= botTop->height;
-		}
-		painth -= st::mediaCaptionSkip;
-	}
 	if (QRect(paintx, painty, paintw, painth).contains(point)) {
 		ensureDataMediaCreated();
-		result.link = (_spoiler && !_spoiler->revealed)
+		result.link = _data->extendedMediaPreview()
+			? priceTagLink()
+			: (_spoiler && !_spoiler->revealed)
 			? _spoiler->link
 			: _data->uploading()
 			? _cancell
@@ -719,7 +784,7 @@ TextState Photo::textState(QPoint point, StateRequest request) const {
 			result.cursor = CursorState::Enlarge;
 		}
 	}
-	if (_caption.isEmpty() && _parent->media() == this) {
+	if (_parent->media() == this && (!_parent->hasBubble() || isBubbleBottom())) {
 		auto fullRight = paintx + paintw;
 		auto fullBottom = painty + painth;
 		const auto bottomInfoResult = _parent->bottomInfoTextState(
@@ -746,13 +811,13 @@ TextState Photo::textState(QPoint point, StateRequest request) const {
 	return result;
 }
 
-QSize Photo::sizeForGroupingOptimal(int maxWidth) const {
+QSize Photo::sizeForGroupingOptimal(int maxWidth, bool last) const {
 	const auto size = photoSize();
 	return { std::max(size.width(), 1), std::max(size.height(), 1)};
 }
 
 QSize Photo::sizeForGrouping(int width) const {
-	return sizeForGroupingOptimal(width);
+	return sizeForGroupingOptimal(width, false);
 }
 
 void Photo::drawGrouped(
@@ -769,8 +834,9 @@ void Photo::drawGrouped(
 
 	const auto st = context.st;
 	const auto sti = context.imageStyle();
-	const auto loaded = _dataMedia->loaded();
-	const auto displayLoading = _data->displayLoading();
+	const auto preview = _data->extendedMediaPreview();
+	const auto loaded = preview || _dataMedia->loaded();
+	const auto displayLoading = !preview && _data->displayLoading();
 
 	if (displayLoading) {
 		ensureAnimation();
@@ -875,7 +941,9 @@ TextState Photo::getStateGrouped(
 		return {};
 	}
 	ensureDataMediaCreated();
-	return TextState(_parent, (_spoiler && !_spoiler->revealed)
+	return TextState(_parent, _data->extendedMediaPreview()
+		? priceTagLink()
+		: (_spoiler && !_spoiler->revealed)
 		? _spoiler->link
 		: _data->uploading()
 		? _cancell
@@ -908,6 +976,7 @@ bool Photo::needInfoDisplay() const {
 	return _parent->data()->isSending()
 		|| _parent->data()->hasFailed()
 		|| _parent->isUnderCursor()
+		|| (_parent->delegate()->elementContext() == Context::ChatPreview)
 		|| _parent->isLastAndSelfMessage();
 }
 
@@ -920,7 +989,8 @@ void Photo::validateGroupedCache(
 
 	ensureDataMediaCreated();
 
-	const auto loaded = _dataMedia->loaded();
+	const auto preview = _data->extendedMediaPreview();
+	const auto loaded = preview || _dataMedia->loaded();
 	const auto loadLevel = loaded
 		? 2
 		: (_dataMedia->thumbnailInline()
@@ -1094,27 +1164,14 @@ bool Photo::videoAutoplayEnabled() const {
 		_data);
 }
 
-TextForMimeData Photo::selectedText(TextSelection selection) const {
-	return _caption.toTextForMimeData(selection);
-}
-
-SelectedQuote Photo::selectedQuote(TextSelection selection) const {
-	return Element::FindSelectedQuote(_caption, selection, _realParent);
-}
-
-TextSelection Photo::selectionFromQuote(const SelectedQuote &quote) const {
-	return Element::FindSelectionFromQuote(_caption, quote);
-}
-
 void Photo::hideSpoilers() {
-	_caption.setSpoilerRevealed(false, anim::type::instant);
 	if (_spoiler) {
 		_spoiler->revealed = false;
 	}
 }
 
 bool Photo::needsBubble() const {
-	if (_storyId || !_caption.isEmpty()) {
+	if (_storyId) {
 		return true;
 	}
 	const auto item = _parent->data();
@@ -1122,6 +1179,7 @@ bool Photo::needsBubble() const {
 		&& (item->repliesAreComments()
 			|| item->externalReply()
 			|| item->viaBot()
+			|| !item->emptyText()
 			|| _parent->displayReply()
 			|| _parent->displayForwardedFrom()
 			|| _parent->displayFromName()
@@ -1137,13 +1195,6 @@ QPoint Photo::resolveCustomInfoRightBottom() const {
 bool Photo::isReadyForOpen() const {
 	ensureDataMediaCreated();
 	return _dataMedia->loaded();
-}
-
-void Photo::parentTextUpdated() {
-	_caption = (_parent->media() == this)
-		? createCaption(_parent->data())
-		: Ui::Text::String();
-	history()->owner().requestViewResize(_parent);
 }
 
 void Photo::showPhoto(FullMsgId id) {

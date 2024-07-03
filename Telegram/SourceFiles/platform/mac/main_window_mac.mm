@@ -63,6 +63,26 @@ namespace {
 // fullscreen mode, after that we'll hide the window no matter what.
 constexpr auto kHideAfterFullscreenTimeoutMs = 3000;
 
+[[nodiscard]] bool PossiblyTextTypingEvent(NSEvent *e) {
+	if ([e type] != NSEventTypeKeyDown) {
+		return false;
+	}
+	NSEventModifierFlags flags = [e modifierFlags]
+		& NSEventModifierFlagDeviceIndependentFlagsMask;
+	if ((flags & ~NSEventModifierFlagShift) != 0) {
+		return false;
+	}
+	NSString *text = [e characters];
+	const auto length = int([text length]);
+	for (auto i = 0; i != length; ++i) {
+		const auto utf16 = [text characterAtIndex:i];
+		if (utf16 >= 32) {
+			return true;
+		}
+	}
+	return false;
+}
+
 } // namespace
 
 class MainWindow::Private {
@@ -72,9 +92,10 @@ public:
 	void setNativeWindow(NSWindow *window, NSView *view);
 	void initTouchBar(
 		NSWindow *window,
-		not_null<Window::Controller*> controller,
-		rpl::producer<bool> canApplyMarkdown);
+		not_null<Window::Controller*> controller);
 	void setWindowBadge(const QString &str);
+
+	void setMarkdownEnabledState(Ui::MarkdownEnabledState state);
 
 	bool clipboardHasText();
 	~Private();
@@ -82,6 +103,8 @@ public:
 private:
 	not_null<MainWindow*> _public;
 	friend class MainWindow;
+
+	rpl::variable<Ui::MarkdownEnabledState> _markdownState;
 
 	NSWindow * __weak _nativeWindow = nil;
 	NSView * __weak _nativeView = nil;
@@ -135,15 +158,19 @@ private:
 namespace Platform {
 namespace {
 
-void SendKeySequence(Qt::Key key, Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
-	const auto focused = static_cast<QObject*>(QApplication::focusWidget());
+void SendKeySequence(
+		Qt::Key key,
+		Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+	const auto focused = QApplication::focusWidget();
 	if (qobject_cast<QLineEdit*>(focused)
 		|| qobject_cast<QTextEdit*>(focused)
 		|| dynamic_cast<HistoryInner*>(focused)) {
-		QKeyEvent pressEvent(QEvent::KeyPress, key, modifiers);
-		focused->event(&pressEvent);
-		QKeyEvent releaseEvent(QEvent::KeyRelease, key, modifiers);
-		focused->event(&releaseEvent);
+		QApplication::postEvent(
+			focused,
+			new QKeyEvent(QEvent::KeyPress, key, modifiers));
+		QApplication::postEvent(
+			focused,
+			new QKeyEvent(QEvent::KeyRelease, key, modifiers));
 	}
 }
 
@@ -209,8 +236,7 @@ void MainWindow::Private::setNativeWindow(NSWindow *window, NSView *view) {
 
 void MainWindow::Private::initTouchBar(
 		NSWindow *window,
-		not_null<Window::Controller*> controller,
-		rpl::producer<bool> canApplyMarkdown) {
+		not_null<Window::Controller*> controller) {
 	if (!IsMac10_13OrGreater()) {
 		return;
 	}
@@ -220,10 +246,15 @@ void MainWindow::Private::initTouchBar(
 	[window
 		performSelectorOnMainThread:@selector(setTouchBar:)
 		withObject:[[[RootTouchBar alloc]
-			init:std::move(canApplyMarkdown)
+			init:_markdownState.value()
 			controller:controller
 			domain:(&Core::App().domain())] autorelease]
 		waitUntilDone:true];
+}
+
+void MainWindow::Private::setMarkdownEnabledState(
+		Ui::MarkdownEnabledState state) {
+	_markdownState = state;
 }
 
 bool MainWindow::Private::clipboardHasText() {
@@ -269,15 +300,37 @@ void MainWindow::initHook() {
 	if (auto view = reinterpret_cast<NSView*>(winId())) {
 		if (auto window = [view window]) {
 			_private->setNativeWindow(window, view);
-			_private->initTouchBar(
-				window,
-				&controller(),
-				_canApplyMarkdown.changes());
+			_private->initTouchBar(window, &controller());
 		}
 	}
 }
 
 void MainWindow::updateWindowIcon() {
+}
+
+bool MainWindow::nativeEvent(
+		const QByteArray &eventType,
+		void *message,
+		qintptr *result) {
+	if (message && eventType == "NSEvent") {
+		const auto event = static_cast<NSEvent*>(message);
+		if (PossiblyTextTypingEvent(event)) {
+			Core::Sandbox::Instance().customEnterFromEventLoop([&] {
+				imeCompositionStartReceived();
+			});
+		} else if ([event type] == NSEventTypePressure) {
+			const auto stage = [event stage];
+			if (_lastPressureStage != stage) {
+				_lastPressureStage = stage;
+				if (stage == 2) {
+					Core::Sandbox::Instance().customEnterFromEventLoop([&] {
+						_forceClicks.fire(QCursor::pos());
+					});
+				}
+			}
+		}
+	}
+	return false;
 }
 
 void MainWindow::hideAndDeactivate() {
@@ -327,12 +380,13 @@ void MainWindow::createGlobalMenu() {
 			ensureWindowShown();
 			controller().showSettings();
 		};
-		main->addAction(
+		auto prefs = main->addAction(
 			tr::lng_mac_menu_preferences(tr::now),
 			this,
 			std::move(callback),
-			QKeySequence(Qt::ControlModifier | Qt::Key_Comma))
-		->setMenuRole(QAction::PreferencesRole);
+			QKeySequence(Qt::ControlModifier | Qt::Key_Comma));
+		prefs->setMenuRole(QAction::PreferencesRole);
+		prefs->setShortcutContext(Qt::WidgetShortcut);
 	}
 
 	QMenu *file = psMainMenu.addMenu(tr::lng_mac_menu_file(tr::now));
@@ -353,6 +407,7 @@ void MainWindow::createGlobalMenu() {
 		this,
 		[] { SendKeySequence(Qt::Key_Z, Qt::ControlModifier); },
 		QKeySequence::Undo);
+	psUndo->setShortcutContext(Qt::WidgetShortcut);
 	psRedo = edit->addAction(
 		tr::lng_mac_menu_redo(tr::now),
 		this,
@@ -362,27 +417,32 @@ void MainWindow::createGlobalMenu() {
 				Qt::ControlModifier | Qt::ShiftModifier);
 		},
 		QKeySequence::Redo);
+	psRedo->setShortcutContext(Qt::WidgetShortcut);
 	edit->addSeparator();
 	psCut = edit->addAction(
 		tr::lng_mac_menu_cut(tr::now),
 		this,
 		[] { SendKeySequence(Qt::Key_X, Qt::ControlModifier); },
 		QKeySequence::Cut);
+	psCut->setShortcutContext(Qt::WidgetShortcut);
 	psCopy = edit->addAction(
 		tr::lng_mac_menu_copy(tr::now),
 		this,
 		[] { SendKeySequence(Qt::Key_C, Qt::ControlModifier); },
 		QKeySequence::Copy);
+	psCopy->setShortcutContext(Qt::WidgetShortcut);
 	psPaste = edit->addAction(
 		tr::lng_mac_menu_paste(tr::now),
 		this,
 		[] { SendKeySequence(Qt::Key_V, Qt::ControlModifier); },
 		QKeySequence::Paste);
+	psPaste->setShortcutContext(Qt::WidgetShortcut);
 	psDelete = edit->addAction(
 		tr::lng_mac_menu_delete(tr::now),
 		this,
 		[] { SendKeySequence(Qt::Key_Delete); },
 		QKeySequence(Qt::ControlModifier | Qt::Key_Backspace));
+	psDelete->setShortcutContext(Qt::WidgetShortcut);
 
 	edit->addSeparator();
 	psBold = edit->addAction(
@@ -390,16 +450,19 @@ void MainWindow::createGlobalMenu() {
 		this,
 		[] { SendKeySequence(Qt::Key_B, Qt::ControlModifier); },
 		QKeySequence::Bold);
+	psBold->setShortcutContext(Qt::WidgetShortcut);
 	psItalic = edit->addAction(
 		tr::lng_menu_formatting_italic(tr::now),
 		this,
 		[] { SendKeySequence(Qt::Key_I, Qt::ControlModifier); },
 		QKeySequence::Italic);
+	psItalic->setShortcutContext(Qt::WidgetShortcut);
 	psUnderline = edit->addAction(
 		tr::lng_menu_formatting_underline(tr::now),
 		this,
 		[] { SendKeySequence(Qt::Key_U, Qt::ControlModifier); },
 		QKeySequence::Underline);
+	psUnderline->setShortcutContext(Qt::WidgetShortcut);
 	psStrikeOut = edit->addAction(
 		tr::lng_menu_formatting_strike_out(tr::now),
 		this,
@@ -409,6 +472,7 @@ void MainWindow::createGlobalMenu() {
 				Qt::ControlModifier | Qt::ShiftModifier);
 		},
 		Ui::kStrikeOutSequence);
+	psStrikeOut->setShortcutContext(Qt::WidgetShortcut);
 	psBlockquote = edit->addAction(
 		tr::lng_menu_formatting_blockquote(tr::now),
 		this,
@@ -418,6 +482,7 @@ void MainWindow::createGlobalMenu() {
 				Qt::ControlModifier | Qt::ShiftModifier);
 		},
 		Ui::kBlockquoteSequence);
+	psBlockquote->setShortcutContext(Qt::WidgetShortcut);
 	psMonospace = edit->addAction(
 		tr::lng_menu_formatting_monospace(tr::now),
 		this,
@@ -427,6 +492,7 @@ void MainWindow::createGlobalMenu() {
 				Qt::ControlModifier | Qt::ShiftModifier);
 		},
 		Ui::kMonospaceSequence);
+	psMonospace->setShortcutContext(Qt::WidgetShortcut);
 	psClearFormat = edit->addAction(
 		tr::lng_menu_formatting_clear(tr::now),
 		this,
@@ -436,6 +502,7 @@ void MainWindow::createGlobalMenu() {
 				Qt::ControlModifier | Qt::ShiftModifier);
 		},
 		Ui::kClearFormatSequence);
+	psClearFormat->setShortcutContext(Qt::WidgetShortcut);
 
 	edit->addSeparator();
 	psSelectAll = edit->addAction(
@@ -443,13 +510,15 @@ void MainWindow::createGlobalMenu() {
 		this,
 		[] { SendKeySequence(Qt::Key_A, Qt::ControlModifier); },
 		QKeySequence::SelectAll);
+	psSelectAll->setShortcutContext(Qt::WidgetShortcut);
 
 	edit->addSeparator();
 	edit->addAction(
 		tr::lng_mac_menu_emoji_and_symbols(tr::now).replace('&', "&&"),
 		this,
 		[] { [NSApp orderFrontCharacterPalette:nil]; },
-		QKeySequence(Qt::MetaModifier | Qt::ControlModifier | Qt::Key_Space));
+		QKeySequence(Qt::MetaModifier | Qt::ControlModifier | Qt::Key_Space)
+	)->setShortcutContext(Qt::WidgetShortcut);
 
 	QMenu *window = psMainMenu.addMenu(tr::lng_mac_menu_window(tr::now));
 	psContacts = window->addAction(tr::lng_mac_menu_contacts(tr::now));
@@ -513,7 +582,7 @@ void MainWindow::updateGlobalMenuHook() {
 	auto focused = QApplication::focusWidget();
 	bool canUndo = false, canRedo = false, canCut = false, canCopy = false, canPaste = false, canDelete = false, canSelectAll = false;
 	auto clipboardHasText = _private->clipboardHasText();
-	auto canApplyMarkdown = false;
+	auto markdownState = Ui::MarkdownEnabledState();
 	if (auto edit = qobject_cast<QLineEdit*>(focused)) {
 		canCut = canCopy = canDelete = edit->hasSelectedText();
 		canSelectAll = !edit->text().isEmpty();
@@ -529,7 +598,7 @@ void MainWindow::updateGlobalMenuHook() {
 		if (canCopy) {
 			if (const auto inputField = dynamic_cast<Ui::InputField*>(
 					focused->parentWidget())) {
-				canApplyMarkdown = inputField->isMarkdownEnabled();
+				markdownState = inputField->markdownEnabledState();
 			}
 		}
 	} else if (auto list = dynamic_cast<HistoryInner*>(focused)) {
@@ -537,7 +606,7 @@ void MainWindow::updateGlobalMenuHook() {
 		canDelete = list->canDeleteSelected();
 	}
 
-	_canApplyMarkdown = canApplyMarkdown;
+	_private->setMarkdownEnabledState(markdownState);
 
 	updateIsActive();
 	const auto logged = (sessionController() != nullptr);
@@ -558,13 +627,19 @@ void MainWindow::updateGlobalMenuHook() {
 	ForceDisabled(psNewChannel, inactive || support);
 	ForceDisabled(psShowTelegram, isActive());
 
-	ForceDisabled(psBold, !canApplyMarkdown);
-	ForceDisabled(psItalic, !canApplyMarkdown);
-	ForceDisabled(psUnderline, !canApplyMarkdown);
-	ForceDisabled(psStrikeOut, !canApplyMarkdown);
-	ForceDisabled(psBlockquote, !canApplyMarkdown);
-	ForceDisabled(psMonospace, !canApplyMarkdown);
-	ForceDisabled(psClearFormat, !canApplyMarkdown);
+	const auto diabled = [=](const QString &tag) {
+		return !markdownState.enabledForTag(tag);
+	};
+	using Field = Ui::InputField;
+	ForceDisabled(psBold, diabled(Field::kTagBold));
+	ForceDisabled(psItalic, diabled(Field::kTagItalic));
+	ForceDisabled(psUnderline, diabled(Field::kTagUnderline));
+	ForceDisabled(psStrikeOut, diabled(Field::kTagStrikeOut));
+	ForceDisabled(psBlockquote, diabled(Field::kTagBlockquote));
+	ForceDisabled(
+		psMonospace,
+		diabled(Field::kTagPre) || diabled(Field::kTagCode));
+	ForceDisabled(psClearFormat, markdownState.disabled());
 }
 
 bool MainWindow::eventFilter(QObject *obj, QEvent *evt) {

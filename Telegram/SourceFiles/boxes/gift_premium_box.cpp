@@ -19,6 +19,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_boosts.h"
 #include "data/data_changes.h"
 #include "data/data_channel.h"
+#include "data/data_credits.h"
 #include "data/data_media_types.h" // Data::GiveawayStart.
 #include "data/data_peer_values.h" // Data::PeerPremiumValue.
 #include "data/data_session.h"
@@ -1010,14 +1011,16 @@ void GiftPremiumValidator::showChoosePeerBox(const QString &ref) {
 				}) | ranges::views::filter([](UserData *u) -> bool {
 					return u;
 				}) | ranges::to<std::vector<not_null<UserData*>>>();
-				if (!users.empty()) {
-					const auto giftBox = show->show(
-						Box(GiftsBox, _controller, users, api, ref));
-					giftBox->boxClosing(
-					) | rpl::start_with_next([=] {
-						_manyGiftsLifetime.destroy();
-					}, giftBox->lifetime());
+				if (users.empty()) {
+					show->showToast(
+						tr::lng_settings_gift_premium_choose(tr::now));
 				}
+				const auto giftBox = show->show(
+					Box(GiftsBox, _controller, users, api, ref));
+				giftBox->boxClosing(
+				) | rpl::start_with_next([=] {
+					_manyGiftsLifetime.destroy();
+				}, giftBox->lifetime());
 				(*ignoreClose) = true;
 				peersBox->closeBox();
 			};
@@ -1147,16 +1150,18 @@ void GiftCodeBox(
 		object_ptr<Ui::Premium::TopBar>(
 			box,
 			st::giveawayGiftCodeCover,
-			nullptr,
-			rpl::conditional(
-				state->used.value(),
-				tr::lng_gift_link_used_title(),
-				tr::lng_gift_link_title()),
-			rpl::conditional(
-				state->used.value(),
-				tr::lng_gift_link_used_about(Ui::Text::RichLangValue),
-				tr::lng_gift_link_about(Ui::Text::RichLangValue)),
-			true));
+			Ui::Premium::TopBarDescriptor{
+				.clickContextOther = nullptr,
+				.title = rpl::conditional(
+					state->used.value(),
+					tr::lng_gift_link_used_title(),
+					tr::lng_gift_link_title()),
+				.about = rpl::conditional(
+					state->used.value(),
+					tr::lng_gift_link_used_about(Ui::Text::RichLangValue),
+					tr::lng_gift_link_about(Ui::Text::RichLangValue)),
+				.light = true,
+			}));
 
 	const auto max = st::giveawayGiftCodeTopHeight;
 	bar->setMaximumHeight(max);
@@ -1283,13 +1288,15 @@ void GiftCodePendingBox(
 			object_ptr<Ui::Premium::TopBar>(
 				box,
 				st,
-				clickContext,
-				tr::lng_gift_link_title(),
-				tr::lng_gift_link_pending_about(
-					lt_user,
-					rpl::single(Ui::Text::Link(resultToName)),
-					Ui::Text::RichLangValue),
-				true));
+				Ui::Premium::TopBarDescriptor{
+					.clickContextOther = clickContext,
+					.title = tr::lng_gift_link_title(),
+					.about = tr::lng_gift_link_pending_about(
+						lt_user,
+						rpl::single(Ui::Text::Link(resultToName)),
+						Ui::Text::RichLangValue),
+					.light = true,
+				}));
 
 		const auto max = st::giveawayGiftCodeTopHeight;
 		bar->setMaximumHeight(max);
@@ -1628,4 +1635,112 @@ void ResolveGiveawayInfo(
 		peer,
 		messageId,
 		crl::guard(controller, show));
+}
+
+void AddCreditsHistoryEntryTable(
+		not_null<Window::SessionNavigation*> controller,
+		not_null<Ui::VerticalLayout*> container,
+		const Data::CreditsHistoryEntry &entry) {
+	auto table = container->add(
+		object_ptr<Ui::TableLayout>(
+			container,
+			st::giveawayGiftCodeTable),
+		st::giveawayGiftCodeTableMargin);
+	const auto peerId = PeerId(entry.barePeerId);
+	if (peerId) {
+		auto text = tr::lng_credits_box_history_entry_peer();
+		AddTableRow(table, std::move(text), controller, peerId);
+	}
+	if (const auto msgId = MsgId(peerId ? entry.bareMsgId : 0)) {
+		const auto session = &controller->session();
+		const auto peer = session->data().peer(peerId);
+		if (const auto channel = peer->asBroadcast()) {
+			const auto username = channel->username();
+			const auto base = username.isEmpty()
+				? u"c/%1"_q.arg(peerToChannel(channel->id).bare)
+				: username;
+			const auto query = base + '/' + QString::number(msgId.bare);
+			const auto link = session->createInternalLink(query);
+			auto label = object_ptr<Ui::FlatLabel>(
+				table,
+				rpl::single(Ui::Text::Link(link)),
+				st::giveawayGiftCodeValue);
+			label->setClickHandlerFilter([=](const auto &...) {
+				controller->showPeerHistory(channel, {}, msgId);
+				return false;
+			});
+			AddTableRow(
+				table,
+				tr::lng_credits_box_history_entry_media(),
+				std::move(label),
+				st::giveawayGiftCodeValueMargin);
+		}
+	}
+	using Type = Data::CreditsHistoryEntry::PeerType;
+	if (entry.peerType == Type::AppStore) {
+		AddTableRow(
+			table,
+			tr::lng_credits_box_history_entry_via(),
+			tr::lng_credits_box_history_entry_app_store(
+				Ui::Text::RichLangValue));
+	} else if (entry.peerType == Type::PlayMarket) {
+		AddTableRow(
+			table,
+			tr::lng_credits_box_history_entry_via(),
+			tr::lng_credits_box_history_entry_play_market(
+				Ui::Text::RichLangValue));
+	} else if (entry.peerType == Type::Fragment) {
+		AddTableRow(
+			table,
+			tr::lng_credits_box_history_entry_via(),
+			tr::lng_credits_box_history_entry_fragment(
+				Ui::Text::RichLangValue));
+	} else if (entry.peerType == Type::Ads) {
+		AddTableRow(
+			table,
+			tr::lng_credits_box_history_entry_via(),
+			tr::lng_credits_box_history_entry_ads(Ui::Text::RichLangValue));
+	}
+	if (!entry.id.isEmpty()) {
+		constexpr auto kOneLineCount = 18;
+		const auto oneLine = entry.id.length() <= kOneLineCount;
+		auto label = object_ptr<Ui::FlatLabel>(
+			table,
+			rpl::single(
+				Ui::Text::Wrapped({ entry.id }, EntityType::Code, {})),
+			oneLine
+				? st::giveawayGiftCodeValue
+				: st::giveawayGiftCodeValueMultiline);
+		label->setClickHandlerFilter([=](const auto &...) {
+			TextUtilities::SetClipboardText(
+				TextForMimeData::Simple(entry.id));
+			controller->showToast(
+				tr::lng_credits_box_history_entry_id_copied(tr::now));
+			return false;
+		});
+		AddTableRow(
+			table,
+			tr::lng_credits_box_history_entry_id(),
+			std::move(label),
+			st::giveawayGiftCodeValueMargin);
+	}
+	if (!entry.date.isNull()) {
+		AddTableRow(
+			table,
+			tr::lng_gift_link_label_date(),
+			rpl::single(Ui::Text::WithEntities(langDateTime(entry.date))));
+	}
+	if (!entry.successDate.isNull()) {
+		AddTableRow(
+			table,
+			tr::lng_credits_box_history_entry_success_date(),
+			rpl::single(Ui::Text::WithEntities(langDateTime(entry.date))));
+	}
+	if (!entry.successLink.isEmpty()) {
+		AddTableRow(
+			table,
+			tr::lng_credits_box_history_entry_success_url(),
+			rpl::single(
+				Ui::Text::Link(entry.successLink, entry.successLink)));
+	}
 }

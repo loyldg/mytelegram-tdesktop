@@ -20,6 +20,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/random.h"
 #include "base/options.h"
 #include "base/unixtime.h"
+#include "base/qt/qt_key_modifiers.h"
 #include "boxes/delete_messages_box.h"
 #include "boxes/max_invite_box.h"
 #include "boxes/moderate_messages_box.h"
@@ -58,6 +59,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/history.h"
 #include "history/history_item_helpers.h" // GetErrorTextForSending.
 #include "history/view/history_view_context_menu.h"
+#include "window/window_separate_id.h"
 #include "window/window_session_controller.h"
 #include "window/window_controller.h"
 #include "settings/settings_advanced.h"
@@ -65,7 +67,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "info/info_controller.h"
 #include "info/info_memento.h"
 #include "info/channel_statistics/boosts/info_boosts_widget.h"
-#include "info/channel_statistics/earn/info_earn_widget.h"
+#include "info/channel_statistics/earn/info_channel_earn_widget.h"
 #include "info/profile/info_profile_values.h"
 #include "info/statistics/info_statistics_widget.h"
 #include "info/stories/info_stories_widget.h"
@@ -94,7 +96,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_menu_icons.h"
 
 #include <QAction>
-#include <QtGui/QGuiApplication>
+#include <QtWidgets/QApplication>
 
 namespace Window {
 namespace {
@@ -135,7 +137,8 @@ void ShareBotGame(
 			MTPVector<MTPMessageEntity>(),
 			MTP_int(0), // schedule_date
 			MTPInputPeer(), // send_as
-			MTPInputQuickReplyShortcut()
+			MTPInputQuickReplyShortcut(),
+			MTPlong()
 		), [=](const MTPUpdates &, const MTP::Response &) {
 	}, [=](const MTP::Error &error, const MTP::Response &) {
 		history->session().api().sendMessageFail(error, history->peer);
@@ -648,20 +651,49 @@ void Filler::addToggleUnreadMark() {
 }
 
 void Filler::addNewWindow() {
+	const auto controller = _controller;
+	if (_folder) {
+		_addAction(tr::lng_context_new_window(tr::now), [=] {
+			Ui::PreventDelayedActivation();
+			controller->showInNewWindow(SeparateId(
+				SeparateType::Archive,
+				&controller->session()));
+		}, &st::menuIconNewWindow);
+		AddSeparatorAndShiftUp(_addAction);
+		return;
+	} else if (const auto weak = base::make_weak(_sublist)) {
+		_addAction(tr::lng_context_new_window(tr::now), [=] {
+			Ui::PreventDelayedActivation();
+			if (const auto sublist = weak.get()) {
+				const auto peer = sublist->peer();
+				controller->showInNewWindow(SeparateId(
+					SeparateType::SavedSublist,
+					peer->owner().history(peer)));
+			}
+		}, &st::menuIconNewWindow);
+		AddSeparatorAndShiftUp(_addAction);
+		return;
+	}
 	const auto history = _request.key.history();
 	if (!_peer
-		|| _topic
-		|| _peer->isForum()
 		|| (history
 			&& history->useTopPromotion()
 			&& !history->topPromotionType().isEmpty())) {
 		return;
 	}
 	const auto peer = _peer;
-	const auto controller = _controller;
+	const auto thread = _topic
+		? not_null<Data::Thread*>(_topic)
+		: _peer->owner().history(_peer);
+	const auto weak = base::make_weak(thread);
 	_addAction(tr::lng_context_new_window(tr::now), [=] {
 		Ui::PreventDelayedActivation();
-		controller->showInNewWindow(peer);
+		if (const auto strong = weak.get()) {
+			const auto forum = !strong->asTopic() && peer->isForum();
+			controller->showInNewWindow(SeparateId(
+				forum ? SeparateType::Forum : SeparateType::Chat,
+				strong));
+		}
 	}, &st::menuIconNewWindow);
 	AddSeparatorAndShiftUp(_addAction);
 }
@@ -1140,7 +1172,7 @@ void Filler::addCreatePoll() {
 			flag,
 			flag,
 			source,
-			sendMenuType);
+			{ sendMenuType });
 	};
 	_addAction(
 		tr::lng_polls_create(tr::now),
@@ -1238,12 +1270,42 @@ void Filler::addViewAsMessages() {
 	}
 	const auto peer = _peer;
 	const auto controller = _controller;
-	_addAction(tr::lng_forum_view_as_messages(tr::now), [=] {
+	const auto parentHideRequests = std::make_shared<rpl::event_stream<>>();
+	const auto filterOutChatPreview = [=] {
+		if (base::IsAltPressed()) {
+			const auto callback = [=](bool shown) {
+				if (!shown) {
+					parentHideRequests->fire({});
+				}
+			};
+			controller->showChatPreview({
+				peer->owner().history(peer),
+				FullMsgId(),
+			}, callback, QApplication::activePopupWidget());
+			return true;
+		} else if (base::IsCtrlPressed()) {
+			Ui::PreventDelayedActivation();
+			controller->showInNewWindow(SeparateId(
+				SeparateType::Chat,
+				peer->owner().history(peer)));
+			return true;
+		}
+		return false;
+	};
+	const auto open = [=] {
 		if (const auto forum = peer->forum()) {
 			peer->owner().saveViewAsMessages(forum, true);
 		}
 		controller->showPeerHistory(peer->id);
-	}, &st::menuIconAsMessages);
+	};
+	auto to_instant = rpl::map_to(anim::type::instant);
+	_addAction({
+		.text = tr::lng_forum_view_as_messages(tr::now),
+		.handler = open,
+		.icon = &st::menuIconAsMessages,
+		.triggerFilter = filterOutChatPreview,
+		.hideRequests = parentHideRequests->events() | to_instant
+	});
 }
 
 void Filler::addViewAsTopics() {
@@ -1406,27 +1468,39 @@ void Filler::fillArchiveActions() {
 	if (_folder->id() != Data::Folder::kId) {
 		return;
 	}
+	addNewWindow();
+
 	const auto controller = _controller;
 	const auto hidden = controller->session().settings().archiveCollapsed();
-	const auto text = hidden
-		? tr::lng_context_archive_expand(tr::now)
-		: tr::lng_context_archive_collapse(tr::now);
-	_addAction(text, [=] {
-		controller->session().settings().setArchiveCollapsed(!hidden);
-		controller->session().saveSettingsDelayed();
-	}, hidden ? &st::menuIconExpand : &st::menuIconCollapse);
-
-	_addAction(tr::lng_context_archive_to_menu(tr::now), [=] {
-		controller->showToast({
-			.text = { tr::lng_context_archive_to_menu_info(tr::now) },
-			.st = &st::windowArchiveToast,
-			.duration = kArchivedToastDuration,
-		});
-
-		controller->session().settings().setArchiveInMainMenu(
-			!controller->session().settings().archiveInMainMenu());
-		controller->session().saveSettingsDelayed();
-	}, &st::menuIconToMainMenu);
+	{
+		const auto text = hidden
+			? tr::lng_context_archive_expand(tr::now)
+			: tr::lng_context_archive_collapse(tr::now);
+		_addAction(text, [=] {
+			controller->session().settings().setArchiveCollapsed(!hidden);
+			controller->session().saveSettingsDelayed();
+		}, hidden ? &st::menuIconExpand : &st::menuIconCollapse);
+	}
+	const auto inmenu = controller->session().settings().archiveInMainMenu();
+	{
+		const auto text = inmenu
+			? tr::lng_context_archive_to_list(tr::now)
+			: tr::lng_context_archive_to_menu(tr::now);
+		_addAction(text, [=] {
+			if (!inmenu) {
+				controller->showToast({
+					.text = {
+						tr::lng_context_archive_to_menu_info(tr::now)
+					},
+					.st = &st::windowArchiveToast,
+					.duration = kArchivedToastDuration,
+				});
+			}
+			controller->session().settings().setArchiveInMainMenu(!inmenu);
+			controller->session().saveSettingsDelayed();
+			controller->window().hideSettingsAndLayer();
+		}, inmenu ? &st::menuIconFromMainMenu : &st::menuIconToMainMenu);
+	}
 
 	MenuAddMarkAsReadChatListAction(
 		controller,
@@ -1434,6 +1508,7 @@ void Filler::fillArchiveActions() {
 		_addAction);
 
 	_addAction({ .isSeparator = true });
+
 	Settings::PreloadArchiveSettings(&controller->session());
 	_addAction(tr::lng_context_archive_settings(tr::now), [=] {
 		controller->show(Box(Settings::ArchiveSettingsBox, controller));
@@ -1441,6 +1516,7 @@ void Filler::fillArchiveActions() {
 }
 
 void Filler::fillSavedSublistActions() {
+	addNewWindow();
 	addTogglePin();
 }
 
@@ -1588,7 +1664,7 @@ void PeerMenuCreatePoll(
 		PollData::Flags chosen,
 		PollData::Flags disabled,
 		Api::SendType sendType,
-		SendMenu::Type sendMenuType) {
+		SendMenu::Details sendMenuDetails) {
 	if (peer->isChannel() && !peer->isMegagroup()) {
 		chosen &= ~PollData::Flag::PublicVotes;
 		disabled |= PollData::Flag::PublicVotes;
@@ -1598,7 +1674,7 @@ void PeerMenuCreatePoll(
 		chosen,
 		disabled,
 		sendType,
-		sendMenuType);
+		sendMenuDetails);
 	const auto weak = Ui::MakeWeak(box.data());
 	const auto lock = box->lifetime().make_state<bool>(false);
 	box->submitRequests(
@@ -1957,17 +2033,17 @@ QPointer<Ui::BoxContent> ShowForwardMessagesBox(
 				ForwardToSelf(show, draft);
 				return true;
 			}
-			auto controller = Core::App().windowFor(peer);
+			const auto id = SeparateId(
+				(peer->isForum()
+					? SeparateType::Forum
+					: SeparateType::Chat),
+				thread);
+			auto controller = Core::App().windowFor(id);
 			if (!controller) {
 				return false;
 			}
 			if (controller->maybeSession() != &peer->session()) {
-				controller = peer->isForum()
-					? Core::App().ensureSeparateWindowForAccount(
-						&peer->account())
-					: Core::App().ensureSeparateWindowForPeer(
-						peer,
-						ShowAtUnreadMsgId);
+				controller = Core::App().ensureSeparateWindowFor(id);
 				if (controller->maybeSession() != &peer->session()) {
 					return false;
 				}
@@ -2070,17 +2146,14 @@ QPointer<Ui::BoxContent> ShowForwardMessagesBox(
 
 			state->menu->addSeparator();
 		}
-		const auto type = sendMenuType();
-		const auto result = SendMenu::FillSendMenu(
+		state->menu->setForcedVerticalOrigin(
+			Ui::PopupMenu::VerticalOrigin::Bottom);
+		SendMenu::FillSendMenu(
 			state->menu.get(),
-			type,
-			SendMenu::DefaultSilentCallback(submit),
-			SendMenu::DefaultScheduleCallback(show, type, submit),
-			SendMenu::DefaultWhenOnlineCallback(submit));
-		const auto success = (result == SendMenu::FillMenuResult::Success);
-		if (showForwardOptions || success) {
-			state->menu->setForcedVerticalOrigin(
-				Ui::PopupMenu::VerticalOrigin::Bottom);
+			show,
+			SendMenu::Details{ sendMenuType() },
+			SendMenu::DefaultCallback(show, crl::guard(parent, submit)));
+		if (showForwardOptions || !state->menu->empty()) {
 			state->menu->popup(QCursor::pos());
 		}
 	};

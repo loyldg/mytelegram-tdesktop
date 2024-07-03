@@ -41,25 +41,12 @@ public:
 		int width);
 	~Photo();
 
+	bool hideMessageText() const override {
+		return false;
+	}
+
 	void draw(Painter &p, const PaintContext &context) const override;
 	TextState textState(QPoint point, StateRequest request) const override;
-
-	[[nodiscard]] TextSelection adjustSelection(
-			TextSelection selection,
-			TextSelectType type) const override {
-		return _caption.adjustSelection(selection, type);
-	}
-	uint16 fullSelectionLength() const override {
-		return _caption.length();
-	}
-	bool hasTextForCopy() const override {
-		return !_caption.isEmpty();
-	}
-
-	TextForMimeData selectedText(TextSelection selection) const override;
-	SelectedQuote selectedQuote(TextSelection selection) const override;
-	TextSelection selectionFromQuote(
-		const SelectedQuote &quote) const override;
 
 	PhotoData *getPhoto() const override {
 		return _data;
@@ -71,7 +58,7 @@ public:
 		QPoint photoPosition,
 		bool markFrameShown) const;
 
-	QSize sizeForGroupingOptimal(int maxWidth) const override;
+	QSize sizeForGroupingOptimal(int maxWidth, bool last) const override;
 	QSize sizeForGrouping(int width) const override;
 	void drawGrouped(
 		Painter &p,
@@ -88,24 +75,28 @@ public:
 		QPoint point,
 		StateRequest request) const override;
 
-	TextWithEntities getCaption() const override {
-		return _caption.toTextWithEntities();
-	}
+	void drawPriceTag(
+		Painter &p,
+		QRect rthumb,
+		const PaintContext &context,
+		Fn<QImage()> generateBackground) const override;
+	ClickHandlerPtr priceTagLink() const override;
+	QImage priceTagBackground() const override;
+
 	void hideSpoilers() override;
 	bool needsBubble() const override;
 	bool customInfoLayout() const override {
-		return _caption.isEmpty();
+		return true;
 	}
 	QPoint resolveCustomInfoRightBottom() const override;
 	bool skipBubbleTail() const override {
-		return isRoundedInBubbleBottom() && _caption.isEmpty();
+		return isRoundedInBubbleBottom();
 	}
 	bool isReadyForOpen() const override;
 
-	void parentTextUpdated() override;
-
 	bool hasHeavyPart() const override;
 	void unloadHeavyPart() override;
+	bool enforceBubbleWidth() const override;
 
 protected:
 	float64 dataProgress() const override;
@@ -114,6 +105,7 @@ protected:
 
 private:
 	struct Streamed;
+	struct PriceTag;
 
 	void create(FullMsgId contextId, PeerData *chat = nullptr);
 
@@ -123,6 +115,7 @@ private:
 
 	void ensureDataMediaCreated() const;
 	void dataMediaCreated() const;
+	void setupPriceTag() const;
 
 	QSize countOptimalSize() override;
 	QSize countCurrentSize(int newWidth) override;
@@ -168,13 +161,14 @@ private:
 
 	const not_null<PhotoData*> _data;
 	const FullStoryId _storyId;
-	Ui::Text::String _caption;
+	mutable std::unique_ptr<PriceTag> _priceTag;
 	mutable std::shared_ptr<Data::PhotoMedia> _dataMedia;
 	mutable std::unique_ptr<Streamed> _streamed;
 	const std::unique_ptr<MediaSpoiler> _spoiler;
 	mutable QImage _imageCache;
 	mutable std::optional<Ui::BubbleRounding> _imageCacheRounding;
-	uint32 _serviceWidth : 28 = 0;
+	uint32 _serviceWidth : 27 = 0;
+	uint32 _purchasedPriceTag : 1 = 0;
 	mutable uint32 _imageCacheForum : 1 = 0;
 	mutable uint32 _imageCacheBlurred : 1 = 0;
 	mutable uint32 _pollingStory : 1 = 0;

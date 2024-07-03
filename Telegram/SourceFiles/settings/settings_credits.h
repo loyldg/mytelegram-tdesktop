@@ -7,10 +7,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-namespace arc {
+#include "settings/settings_type.h"
 
-constexpr auto kFullLength = 360 * 16;
-constexpr auto kQuarterLength = (kFullLength / 4);
-constexpr auto kHalfLength = (kFullLength / 2);
+namespace Settings {
 
-} // namespace arc
+[[nodiscard]] Type CreditsId();
+
+} // namespace Settings
+

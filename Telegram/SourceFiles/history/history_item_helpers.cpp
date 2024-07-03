@@ -10,6 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "api/api_text_entities.h"
 #include "boxes/premium_preview_box.h"
 #include "calls/calls_instance.h"
+#include "data/components/sponsored_messages.h"
 #include "data/stickers/data_custom_emoji.h"
 #include "data/notify/data_notify_settings.h"
 #include "data/data_channel.h"
@@ -316,7 +317,7 @@ ClickHandlerPtr JumpToMessageClickHandler(
 		TextWithEntities highlightPart,
 		int highlightPartOffsetHint) {
 	return std::make_shared<LambdaClickHandler>([=] {
-		const auto separate = Core::App().separateWindowForPeer(peer);
+		const auto separate = Core::App().separateWindowFor(peer);
 		const auto controller = separate
 			? separate->sessionController()
 			: peer->session().tryResolveWindow();
@@ -346,7 +347,7 @@ ClickHandlerPtr JumpToStoryClickHandler(
 		not_null<PeerData*> peer,
 		StoryId storyId) {
 	return std::make_shared<LambdaClickHandler>([=] {
-		const auto separate = Core::App().separateWindowForPeer(peer);
+		const auto separate = Core::App().separateWindowFor(peer);
 		const auto controller = separate
 			? separate->sessionController()
 			: peer->session().tryResolveWindow();
@@ -363,7 +364,14 @@ ClickHandlerPtr HideSponsoredClickHandler() {
 	return std::make_shared<LambdaClickHandler>([=](ClickContext context) {
 		const auto my = context.other.value<ClickHandlerContext>();
 		if (const auto controller = my.sessionWindow.get()) {
-			ShowPremiumPreviewBox(controller, PremiumFeature::NoAds);
+			const auto &session = controller->session();
+			if (session.premium()) {
+				using Result = Data::SponsoredReportResult;
+				session.sponsoredMessages().createReportCallback(
+					my.itemId)(Result::Id("-1"), [](const auto &) {});
+			} else {
+				ShowPremiumPreviewBox(controller, PremiumFeature::NoAds);
+			}
 		}
 	});
 }
@@ -548,6 +556,8 @@ MediaCheckResult CheckMessageMedia(const MTPMessageMedia &media) {
 	}, [](const MTPDmessageMediaGiveaway &) {
 		return Result::Good;
 	}, [](const MTPDmessageMediaGiveawayResults &) {
+		return Result::Good;
+	}, [](const MTPDmessageMediaPaidMedia &) {
 		return Result::Good;
 	}, [](const MTPDmessageMediaUnsupported &) {
 		return Result::Unsupported;
