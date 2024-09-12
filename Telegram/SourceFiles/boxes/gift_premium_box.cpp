@@ -23,7 +23,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_media_types.h" // Data::GiveawayStart.
 #include "data/data_peer_values.h" // Data::PeerPremiumValue.
 #include "data/data_session.h"
-#include "data/data_subscription_option.h"
+#include "data/data_premium_subscription_option.h"
 #include "data/data_user.h"
 #include "data/stickers/data_custom_emoji.h"
 #include "info/channel_statistics/boosts/giveaway/boost_badge.h" // InfiniteRadialAnimationWidget.
@@ -66,8 +66,26 @@ namespace {
 
 constexpr auto kUserpicsMax = size_t(3);
 
-using GiftOption = Data::SubscriptionOption;
-using GiftOptions = Data::SubscriptionOptions;
+using GiftOption = Data::PremiumSubscriptionOption;
+using GiftOptions = Data::PremiumSubscriptionOptions;
+
+[[nodiscard]] QString CreateMessageLink(
+		not_null<Main::Session*> session,
+		PeerId peerId,
+		uint64 messageId) {
+	if (const auto msgId = MsgId(peerId ? messageId : 0)) {
+		const auto peer = session->data().peer(peerId);
+		if (const auto channel = peer->asBroadcast()) {
+			const auto username = channel->username();
+			const auto base = username.isEmpty()
+				? u"c/%1"_q.arg(peerToChannel(channel->id).bare)
+				: username;
+			const auto query = base + '/' + QString::number(msgId.bare);
+			return session->createInternalLink(query);
+		}
+	}
+	return QString();
+};
 
 GiftOptions GiftOptionFromTL(const MTPDuserFull &data) {
 	auto result = GiftOptions();
@@ -75,7 +93,7 @@ GiftOptions GiftOptionFromTL(const MTPDuserFull &data) {
 	if (!gifts) {
 		return result;
 	}
-	result = Api::SubscriptionOptionsFromTL(gifts->v);
+	result = Api::PremiumSubscriptionOptionsFromTL(gifts->v);
 	for (auto &option : result) {
 		option.costPerMonth = tr::lng_premium_gift_per(
 			tr::now,
@@ -932,8 +950,8 @@ void ShowAlreadyPremiumToast(
 			Ui::Text::Link(
 				Ui::Text::Bold(tr::lng_gift_link_already_link(tr::now))),
 			Ui::Text::WithEntities),
-		.duration = 6 * crl::time(1000),
 		.filter = crl::guard(navigation, shareLink),
+		.duration = 6 * crl::time(1000),
 	});
 }
 
@@ -1014,6 +1032,7 @@ void GiftPremiumValidator::showChoosePeerBox(const QString &ref) {
 				if (users.empty()) {
 					show->showToast(
 						tr::lng_settings_gift_premium_choose(tr::now));
+					return;
 				}
 				const auto giftBox = show->show(
 					Box(GiftsBox, _controller, users, api, ref));
@@ -1418,20 +1437,55 @@ void GiveawayInfoBox(
 		: !start->channels.empty()
 		? start->channels.front()->name()
 		: u"channel"_q;
-	auto text = TextWithEntities();
 
-	if (!info.giftCode.isEmpty()) {
-		text.append("\n\n");
-		text.append(Ui::Text::Bold(tr::lng_prizes_you_won(
-			tr::now,
+	auto resultText = (!info.giftCode.isEmpty())
+		? tr::lng_prizes_you_won(
 			lt_cup,
-			QString::fromUtf8("\xf0\x9f\x8f\x86"))));
-		text.append("\n\n");
-	} else if (info.state == State::Finished) {
-		text.append("\n\n");
-		text.append(Ui::Text::Bold(tr::lng_prizes_you_didnt(tr::now)));
-		text.append("\n\n");
+			rpl::single(
+				TextWithEntities{ QString::fromUtf8("\xf0\x9f\x8f\x86") }),
+			Ui::Text::WithEntities)
+		: (info.credits)
+		? tr::lng_prizes_you_won_credits(
+			lt_amount,
+			tr::lng_prizes_you_won_credits_amount(
+				lt_count,
+				rpl::single(float64(info.credits)),
+				Ui::Text::Bold),
+			lt_cup,
+			rpl::single(
+				TextWithEntities{ QString::fromUtf8("\xf0\x9f\x8f\x86") }),
+			Ui::Text::WithEntities)
+		: (info.state == State::Finished)
+		? tr::lng_prizes_you_didnt(Ui::Text::WithEntities)
+		: (rpl::producer<TextWithEntities>)(nullptr);
+
+	if (resultText) {
+		const auto &st = st::changePhoneDescription;
+		const auto skip = st.style.font->height * 0.5;
+		auto label = object_ptr<Ui::FlatLabel>(
+			box.get(),
+			std::move(resultText),
+			st);
+		if ((!info.giftCode.isEmpty()) || info.credits) {
+			label->setTextColorOverride(st::windowActiveTextFg->c);
+		}
+		const auto result = box->addRow(
+			object_ptr<Ui::PaddingWrap<Ui::CenterWrap<Ui::FlatLabel>>>(
+				box.get(),
+				object_ptr<Ui::CenterWrap<Ui::FlatLabel>>(
+					box.get(),
+					std::move(label)),
+				QMargins(0, skip, 0, skip)));
+		result->paintRequest() | rpl::start_with_next([=] {
+			auto p = QPainter(result);
+			p.setPen(Qt::NoPen);
+			p.setBrush(st::boxDividerBg);
+			p.drawRoundedRect(result->rect(), st::boxRadius, st::boxRadius);
+		}, result->lifetime());
+		Ui::AddSkip(box->verticalLayout());
 	}
+
+	auto text = TextWithEntities();
 
 	const auto quantity = start
 		? start->quantity
@@ -1441,22 +1495,39 @@ void GiveawayInfoBox(
 		? results->channel->isMegagroup()
 		: (!start->channels.empty()
 			&& start->channels.front()->isMegagroup());
+	const auto credits = start
+		? start->credits
+		: (results ? results->credits : 0);
 	text.append((finished
 		? tr::lng_prizes_end_text
 		: tr::lng_prizes_how_text)(
 			tr::now,
 			lt_admins,
-			(group
-				? tr::lng_prizes_admins_group
-				: tr::lng_prizes_admins)(
-					tr::now,
-					lt_count,
-					quantity,
-					lt_channel,
-					Ui::Text::Bold(first),
-					lt_duration,
-					TextWithEntities{ GiftDuration(months) },
-					Ui::Text::RichLangValue),
+			credits
+				? (group
+					? tr::lng_prizes_credits_admins_group
+					: tr::lng_prizes_credits_admins)(
+						tr::now,
+						lt_channel,
+						Ui::Text::Bold(first),
+						lt_amount,
+						tr::lng_prizes_credits_admins_amount(
+							tr::now,
+							lt_count_decimal,
+							float64(credits),
+							Ui::Text::Bold),
+						Ui::Text::RichLangValue)
+				: (group
+					? tr::lng_prizes_admins_group
+					: tr::lng_prizes_admins)(
+						tr::now,
+						lt_count,
+						quantity,
+						lt_channel,
+						Ui::Text::Bold(first),
+						lt_duration,
+						TextWithEntities{ GiftDuration(months) },
+						Ui::Text::RichLangValue),
 			Ui::Text::RichLangValue));
 	const auto many = start
 		? (start->channels.size() > 1)
@@ -1641,26 +1712,29 @@ void AddCreditsHistoryEntryTable(
 		not_null<Window::SessionNavigation*> controller,
 		not_null<Ui::VerticalLayout*> container,
 		const Data::CreditsHistoryEntry &entry) {
+	if (!entry) {
+		return;
+	}
 	auto table = container->add(
 		object_ptr<Ui::TableLayout>(
 			container,
 			st::giveawayGiftCodeTable),
 		st::giveawayGiftCodeTableMargin);
 	const auto peerId = PeerId(entry.barePeerId);
+	const auto session = &controller->session();
 	if (peerId) {
-		auto text = tr::lng_credits_box_history_entry_peer();
+		auto text = entry.in
+			? tr::lng_credits_box_history_entry_peer_in()
+			: tr::lng_credits_box_history_entry_peer();
 		AddTableRow(table, std::move(text), controller, peerId);
 	}
 	if (const auto msgId = MsgId(peerId ? entry.bareMsgId : 0)) {
-		const auto session = &controller->session();
 		const auto peer = session->data().peer(peerId);
 		if (const auto channel = peer->asBroadcast()) {
-			const auto username = channel->username();
-			const auto base = username.isEmpty()
-				? u"c/%1"_q.arg(peerToChannel(channel->id).bare)
-				: username;
-			const auto query = base + '/' + QString::number(msgId.bare);
-			const auto link = session->createInternalLink(query);
+			const auto link = CreateMessageLink(
+				session,
+				peerId,
+				entry.bareMsgId);
 			auto label = object_ptr<Ui::FlatLabel>(
 				table,
 				rpl::single(Ui::Text::Link(link)),
@@ -1692,14 +1766,55 @@ void AddCreditsHistoryEntryTable(
 	} else if (entry.peerType == Type::Fragment) {
 		AddTableRow(
 			table,
-			tr::lng_credits_box_history_entry_via(),
-			tr::lng_credits_box_history_entry_fragment(
-				Ui::Text::RichLangValue));
+			(entry.gift
+				? tr::lng_credits_box_history_entry_peer_in
+				: tr::lng_credits_box_history_entry_via)(),
+			(entry.gift
+				? tr::lng_credits_box_history_entry_anonymous
+				: tr::lng_credits_box_history_entry_fragment)(
+					Ui::Text::RichLangValue));
 	} else if (entry.peerType == Type::Ads) {
 		AddTableRow(
 			table,
 			tr::lng_credits_box_history_entry_via(),
 			tr::lng_credits_box_history_entry_ads(Ui::Text::RichLangValue));
+	} else if (entry.peerType == Type::PremiumBot) {
+		AddTableRow(
+			table,
+			tr::lng_credits_box_history_entry_via(),
+			tr::lng_credits_box_history_entry_via_premium_bot(
+				Ui::Text::RichLangValue));
+	}
+	if (entry.bareGiveawayMsgId) {
+		AddTableRow(
+			table,
+			tr::lng_gift_link_label_to(),
+			controller,
+			controller->session().userId());
+	}
+	if (entry.bareGiveawayMsgId && entry.credits) {
+		AddTableRow(
+			table,
+			tr::lng_gift_link_label_gift(),
+			tr::lng_gift_stars_title(
+				lt_count,
+				rpl::single(float64(entry.credits)),
+				Ui::Text::RichLangValue));
+	}
+	{
+		const auto link = CreateMessageLink(
+			session,
+			peerId,
+			entry.bareGiveawayMsgId);
+		if (!link.isEmpty()) {
+			AddTableRow(
+				table,
+				tr::lng_gift_link_label_reason(),
+				tr::lng_gift_link_reason_giveaway(
+				) | rpl::map([link](const QString &text) {
+					return Ui::Text::Link(text, link);
+				}));
+		}
 	}
 	if (!entry.id.isEmpty()) {
 		constexpr auto kOneLineCount = 18;
@@ -1742,5 +1857,115 @@ void AddCreditsHistoryEntryTable(
 			tr::lng_credits_box_history_entry_success_url(),
 			rpl::single(
 				Ui::Text::Link(entry.successLink, entry.successLink)));
+	}
+}
+
+void AddSubscriptionEntryTable(
+		not_null<Window::SessionNavigation*> controller,
+		not_null<Ui::VerticalLayout*> container,
+		const Data::SubscriptionEntry &s) {
+	if (!s) {
+		return;
+	}
+	auto table = container->add(
+		object_ptr<Ui::TableLayout>(
+			container,
+			st::giveawayGiftCodeTable),
+		st::giveawayGiftCodeTableMargin);
+	const auto peerId = PeerId(s.barePeerId);
+	AddTableRow(
+		table,
+		tr::lng_credits_subscription_row_to(),
+		controller,
+		peerId);
+	if (!s.until.isNull()) {
+		AddTableRow(
+			table,
+			s.expired
+				? tr::lng_credits_subscription_row_next_none()
+				: s.cancelled
+				? tr::lng_credits_subscription_row_next_off()
+				: tr::lng_credits_subscription_row_next_on(),
+			rpl::single(Ui::Text::WithEntities(langDateTime(s.until))));
+	}
+}
+
+void AddSubscriberEntryTable(
+		not_null<Window::SessionNavigation*> controller,
+		not_null<Ui::VerticalLayout*> container,
+		not_null<PeerData*> peer,
+		TimeId date) {
+	auto table = container->add(
+		object_ptr<Ui::TableLayout>(
+			container,
+			st::giveawayGiftCodeTable),
+		st::giveawayGiftCodeTableMargin);
+	AddTableRow(
+		table,
+		tr::lng_group_invite_joined_row_subscriber(),
+		controller,
+		peer->id);
+	if (const auto d = base::unixtime::parse(date); !d.isNull()) {
+		AddTableRow(
+			table,
+			tr::lng_group_invite_joined_row_date(),
+			rpl::single(Ui::Text::WithEntities(langDateTime(d))));
+	}
+}
+
+void AddCreditsBoostTable(
+		not_null<Window::SessionNavigation*> controller,
+		not_null<Ui::VerticalLayout*> container,
+		const Data::Boost &b) {
+	auto table = container->add(
+		object_ptr<Ui::TableLayout>(
+			container,
+			st::giveawayGiftCodeTable),
+		st::giveawayGiftCodeTableMargin);
+	const auto peerId = b.giveawayMessage.peer;
+	if (!peerId) {
+		return;
+	}
+	const auto from = controller->session().data().peer(peerId);
+	AddTableRow(
+		table,
+		tr::lng_credits_box_history_entry_peer_in(),
+		controller,
+		from->id);
+	if (b.credits) {
+		AddTableRow(
+			table,
+			tr::lng_gift_link_label_gift(),
+			tr::lng_gift_stars_title(
+				lt_count,
+				rpl::single(float64(b.credits)),
+				Ui::Text::RichLangValue));
+	}
+	{
+		const auto link = CreateMessageLink(
+			&controller->session(),
+			peerId,
+			b.giveawayMessage.msg.bare);
+		if (!link.isEmpty()) {
+			AddTableRow(
+				table,
+				tr::lng_gift_link_label_reason(),
+				tr::lng_gift_link_reason_giveaway(
+				) | rpl::map([link](const QString &text) {
+					return Ui::Text::Link(text, link);
+				}));
+		}
+	}
+	if (!b.date.isNull()) {
+		AddTableRow(
+			table,
+			tr::lng_gift_link_label_date(),
+			rpl::single(Ui::Text::WithEntities(langDateTime(b.date))));
+	}
+	if (!b.expiresAt.isNull()) {
+		AddTableRow(
+			table,
+			tr::lng_gift_until(),
+			rpl::single(Ui::Text::WithEntities(langDateTime(b.expiresAt))));
 	}
 }

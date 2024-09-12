@@ -10,6 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "api/api_credits.h"
 #include "apiwrap.h"
 #include "core/ui_integration.h" // Core::MarkedTextContext.
+#include "data/components/credits.h"
 #include "data/data_credits.h"
 #include "data/data_photo.h"
 #include "data/data_session.h"
@@ -23,6 +24,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "payments/payments_checkout_process.h"
 #include "payments/payments_form.h"
 #include "settings/settings_credits_graphics.h"
+#include "ui/boxes/confirm_box.h"
 #include "ui/controls/userpic_button.h"
 #include "ui/effects/premium_graphics.h"
 #include "ui/effects/premium_top_bar.h" // Ui::Premium::ColorizedSvg.
@@ -79,14 +81,12 @@ struct PaidMediaData {
 		}
 	}
 
+	const auto bot = item->viaBot();
 	const auto sender = item->originalSender();
-	const auto broadcast = (sender && sender->isBroadcast())
-		? sender
-		: message->peer.get();
 	return {
 		.invoice = invoice,
 		.item = item,
-		.peer = broadcast,
+		.peer = (bot ? bot : sender ? sender : message->peer.get()),
 		.photos = photos,
 		.videos = videos,
 	};
@@ -129,6 +129,16 @@ struct PaidMediaData {
 					lt_video,
 					std::move(videosBold),
 					Ui::Text::WithEntities);
+		if (const auto user = data.peer->asUser()) {
+			return tr::lng_credits_box_out_media_user(
+				lt_count,
+				rpl::single(form->invoice.amount) | tr::to_count(),
+				lt_media,
+				std::move(media),
+				lt_user,
+				rpl::single(Ui::Text::Bold(user->shortName())),
+				Ui::Text::RichLangValue);
+		}
 		return tr::lng_credits_box_out_media(
 			lt_count,
 			rpl::single(form->invoice.amount) | tr::to_count(),
@@ -257,6 +267,8 @@ void SendCreditsBox(
 		if (state->confirmButtonBusy.current()) {
 			return;
 		}
+		const auto show = box->uiShow();
+		const auto weak = MakeWeak(box.get());
 		state->confirmButtonBusy = true;
 		session->api().request(
 			MTPpayments_SendStarsForm(
@@ -264,12 +276,31 @@ void SendCreditsBox(
 				MTP_long(form->formId),
 				form->inputInvoice)
 		).done([=](auto result) {
-			state->confirmButtonBusy = false;
-			box->closeBox();
+			if (weak) {
+				state->confirmButtonBusy = false;
+				box->closeBox();
+			}
 			sent();
 		}).fail([=](const MTP::Error &error) {
-			state->confirmButtonBusy = false;
-			box->uiShow()->showToast(error.type());
+			if (weak) {
+				state->confirmButtonBusy = false;
+			}
+			const auto id = error.type();
+			if (id == u"BOT_PRECHECKOUT_FAILED"_q) {
+				auto error = ::Ui::MakeInformBox(
+					tr::lng_payments_precheckout_stars_failed(tr::now));
+				error->boxClosing() | rpl::start_with_next([=] {
+					if (const auto paybox = weak.data()) {
+						paybox->closeBox();
+					}
+				}, error->lifetime());
+				show->showBox(std::move(error));
+			} else if (id == u"BOT_PRECHECKOUT_TIMEOUT"_q) {
+				show->showToast(
+					tr::lng_payments_precheckout_stars_timeout(tr::now));
+			} else {
+				show->showToast(id);
+			}
 		}).send();
 	});
 	{
@@ -279,7 +310,7 @@ void SendCreditsBox(
 			st::giveawayGiftCodeStartButton.height / 2);
 		AddChildToWidgetCenter(button.data(), loadingAnimation);
 		loadingAnimation->showOn(state->confirmButtonBusy.value());
-		}
+	}
 	{
 		auto buttonText = tr::lng_credits_box_out_confirm(
 			lt_count,
@@ -339,15 +370,11 @@ void SendCreditsBox(
 	}
 
 	{
+		session->credits().load(true);
 		const auto balance = Settings::AddBalanceWidget(
 			content,
-			session->creditsValue(),
+			session->credits().balanceValue(),
 			false);
-		const auto api = balance->lifetime().make_state<Api::CreditsStatus>(
-			session->user());
-		api->request({}, [=](Data::CreditsStatusSlice slice) {
-			session->setCredits(slice.balance);
-		});
 		rpl::combine(
 			balance->sizeValue(),
 			content->sizeValue()

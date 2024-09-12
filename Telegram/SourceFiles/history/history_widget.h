@@ -37,6 +37,7 @@ struct Details;
 } // namespace SendMenu
 
 namespace Api {
+struct MessageToSend;
 struct SendOptions;
 struct SendAction;
 } // namespace Api
@@ -87,6 +88,7 @@ class TabbedSelector;
 
 namespace HistoryView {
 class StickerToast;
+class PaidReactionToast;
 class TopBarWidget;
 class ContactStatus;
 class BusinessBotStatus;
@@ -249,8 +251,6 @@ public:
 
 	void applyCloudDraft(History *history);
 
-	void updateFieldSubmitSettings();
-
 	void activate();
 	void setInnerFocus();
 	[[nodiscard]] rpl::producer<> cancelRequests() const {
@@ -272,7 +272,7 @@ public:
 	[[nodiscard]] SendMenu::Details saveMenuDetails() const;
 	bool sendExistingDocument(
 		not_null<DocumentData*> document,
-		Api::SendOptions options,
+		Api::MessageToSend messageToSend,
 		std::optional<MsgId> localId = std::nullopt);
 	bool sendExistingPhoto(
 		not_null<PhotoData*> photo,
@@ -377,6 +377,8 @@ private:
 	void showMembersDropdown();
 	void windowIsVisibleChanged();
 	void saveFieldToHistoryLocalDraft();
+
+	void updateFieldSubmitSettings();
 
 	// Checks if we are too close to the top or to the bottom
 	// in the scroll area and preloads history if needed.
@@ -824,6 +826,8 @@ private:
 	HistoryView::InfoTooltip _topToast;
 	std::unique_ptr<HistoryView::StickerToast> _stickerToast;
 	std::unique_ptr<ChooseMessagesForReport> _chooseForReport;
+
+	std::unique_ptr<HistoryView::PaidReactionToast> _paidReactionToast;
 
 	base::flat_set<not_null<HistoryItem*>> _itemRevealPending;
 	base::flat_map<

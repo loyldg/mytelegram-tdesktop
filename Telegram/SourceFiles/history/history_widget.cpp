@@ -48,6 +48,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/controls/send_button.h"
 #include "ui/controls/send_as_button.h"
 #include "ui/controls/silent_toggle.h"
+#include "ui/ui_utility.h"
 #include "inline_bots/inline_bot_result.h"
 #include "base/event_filter.h"
 #include "base/qt_signal_producer.h"
@@ -55,6 +56,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/unixtime.h"
 #include "base/call_delayed.h"
 #include "data/business/data_shortcut_messages.h"
+#include "data/components/credits.h"
 #include "data/components/scheduled_messages.h"
 #include "data/components/sponsored_messages.h"
 #include "data/notify/data_notify_settings.h"
@@ -103,6 +105,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/view/history_view_top_bar_widget.h"
 #include "history/view/history_view_contact_status.h"
 #include "history/view/history_view_context_menu.h"
+#include "history/view/history_view_paid_reaction_toast.h"
 #include "history/view/history_view_pinned_tracker.h"
 #include "history/view/history_view_pinned_section.h"
 #include "history/view/history_view_pinned_bar.h"
@@ -284,6 +287,13 @@ HistoryWidget::HistoryWidget(
 	})
 , _saveDraftTimer([=] { saveDraft(); })
 , _saveCloudDraftTimer([=] { saveCloudDraft(); })
+, _paidReactionToast(std::make_unique<HistoryView::PaidReactionToast>(
+	this,
+	&session().data(),
+	rpl::single(st::topBarHeight),
+	[=](not_null<const HistoryView::Element*> view) {
+		return _list && _list->itemTop(view) >= 0;
+	}))
 , _topShadow(this) {
 	setAcceptDrops(true);
 
@@ -320,6 +330,10 @@ HistoryWidget::HistoryWidget(
 
 	_fieldBarCancel->addClickHandler([=] { cancelFieldAreaState(); });
 	_send->addClickHandler([=] { sendButtonClicked(); });
+
+	_mediaEditManager.updateRequests() | rpl::start_with_next([this] {
+		updateOverStates(mapFromGlobal(QCursor::pos()));
+	}, lifetime());
 
 	{
 		using namespace SendMenu;
@@ -648,6 +662,12 @@ HistoryWidget::HistoryWidget(
 			updateHistoryGeometry();
 		});
 	}, lifetime());
+	Core::App().settings().sendSubmitWayValue(
+	) | rpl::start_with_next([=] {
+		crl::on_main(this, [=] {
+			updateFieldSubmitSettings();
+		});
+	}, lifetime());
 
 	session().data().channelDifferenceTooLong(
 	) | rpl::filter([=](not_null<ChannelData*> channel) {
@@ -813,6 +833,14 @@ HistoryWidget::HistoryWidget(
 			updateStickersByEmoji();
 			updateFieldPlaceholder();
 			_preview->checkNow(false);
+
+			const auto was = (_sendAs != nullptr);
+			refreshSendAsToggle();
+			if (was != (_sendAs != nullptr)) {
+				updateControlsVisibility();
+				updateControlsGeometry();
+				orderWidgets();
+			}
 		}
 		if (flags & PeerUpdateFlag::Migration) {
 			handlePeerMigration();
@@ -869,6 +897,11 @@ HistoryWidget::HistoryWidget(
 		}
 		if (flags & PeerUpdateFlag::FullInfo) {
 			fullInfoUpdated();
+			if (const auto channel = _peer ? _peer->asChannel() : nullptr) {
+				if (channel->allowedReactions().paidEnabled) {
+					session().credits().load();
+				}
+			}
 		}
 	}, lifetime());
 
@@ -1175,7 +1208,13 @@ void HistoryWidget::initTabbedSelector() {
 			controller()->sendingAnimation().appendSending(
 				data.messageSendingFrom);
 			const auto localId = data.messageSendingFrom.localId;
-			sendExistingDocument(data.document, data.options, localId);
+			auto messageToSend = Api::MessageToSend(
+				prepareSendAction(data.options));
+			messageToSend.textWithTags = base::take(data.caption);
+			sendExistingDocument(
+				data.document,
+				std::move(messageToSend),
+				localId);
 		}
 	}, lifetime());
 
@@ -4940,7 +4979,14 @@ bool HistoryWidget::updateCmdStartShown() {
 			const auto user = _peer ? _peer->asUser() : nullptr;
 			const auto bot = (user && user->isBot()) ? user : nullptr;
 			if (bot && !bot->botInfo->botMenuButtonUrl.isEmpty()) {
-				session().attachWebView().requestMenu(controller(), bot);
+				session().attachWebView().open({
+					.bot = bot,
+					.context = { .controller = controller() },
+					.button = {
+						.url = bot->botInfo->botMenuButtonUrl.toUtf8(),
+					},
+					.source = InlineBots::WebViewSourceBotMenu(),
+				});
 			} else if (!_fieldAutocomplete->isHidden()) {
 				_fieldAutocomplete->hideAnimated();
 			} else {
@@ -5668,7 +5714,7 @@ bool HistoryWidget::confirmSendingFiles(
 			cursor.setPosition(position, QTextCursor::KeepAnchor);
 		}
 		_field->setTextCursor(cursor);
-		if (!insertTextOnCancel.isEmpty()) {
+		if (Ui::InsertTextOnImageCancel(insertTextOnCancel)) {
 			_field->textCursor().insertText(insertTextOnCancel);
 		}
 	}));
@@ -6423,8 +6469,11 @@ void HistoryWidget::updateBotKeyboard(History *h, bool force) {
 			: nullptr;
 		changed = _keyboard->updateMarkup(keyboardItem, force);
 	}
-	updateCmdStartShown();
+	const auto controlsChanged = updateCmdStartShown();
 	if (!changed) {
+		if (controlsChanged) {
+			updateControlsGeometry();
+		}
 		return;
 	} else if (_keyboard->forMsgId() != wasMsgId) {
 		_kbScroll->scrollTo({ 0, 0 });
@@ -7425,7 +7474,7 @@ void HistoryWidget::requestMessageData(MsgId msgId) {
 
 bool HistoryWidget::sendExistingDocument(
 		not_null<DocumentData*> document,
-		Api::SendOptions options,
+		Api::MessageToSend messageToSend,
 		std::optional<MsgId> localId) {
 	const auto error = _peer
 		? Data::RestrictionError(_peer, ChatRestriction::SendStickers)
@@ -7441,7 +7490,7 @@ bool HistoryWidget::sendExistingDocument(
 	}
 
 	Api::SendExistingDocument(
-		Api::MessageToSend(prepareSendAction(options)),
+		std::move(messageToSend),
 		document,
 		localId);
 
@@ -7968,12 +8017,17 @@ void HistoryWidget::handlePeerUpdate() {
 		}
 	}
 	if (!_showAnimation) {
-		if (_unblock->isHidden() == isBlocked()
+		const auto blockChanged = (_unblock->isHidden() == isBlocked());
+		if (blockChanged
 			|| (!isBlocked() && _joinChannel->isHidden() == isJoinChannel())) {
 			resize = true;
 		}
 		if (updateCanSendMessage()) {
 			resize = true;
+		}
+		if (blockChanged) {
+			_list->refreshAboutView(true);
+			_list->updateBotInfo();
 		}
 		updateControlsVisibility();
 		if (resize) {

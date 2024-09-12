@@ -315,6 +315,10 @@ void UnreadBar::paint(
 		int y,
 		int w,
 		bool chatWide) const {
+	const auto previousTranslation = p.transform().dx();
+	if (previousTranslation != 0) {
+		p.translate(-previousTranslation, 0);
+	}
 	const auto st = context.st;
 	const auto bottom = y + height();
 	y += marginTop();
@@ -350,6 +354,9 @@ void UnreadBar::paint(
 		(w - width) / 2,
 		y + (skip / 2) + st::historyUnreadBarFont->ascent,
 		text);
+	if (previousTranslation != 0) {
+		p.translate(previousTranslation, 0);
+	}
 }
 
 void DateBadge::init(const QString &date) {
@@ -442,8 +449,8 @@ void ServicePreMessage::paint(
 		.align = style::al_top,
 		.palette = &context.st->serviceTextPalette(),
 		.now = context.now,
-		//.selection = context.selection,
 		.fullWidthSelection = false,
+		//.selection = context.selection,
 	});
 
 	p.translate(0, -top);
@@ -736,6 +743,10 @@ void Element::refreshMedia(Element *replacing) {
 	_flags &= ~Flag::HiddenByGroup;
 
 	const auto item = data();
+	if (!item->computeUnavailableReason().isEmpty()) {
+		_media = nullptr;
+		return;
+	}
 	if (const auto media = item->media()) {
 		if (media->canBeGrouped()) {
 			if (const auto group = history()->owner().groups().find(item)) {
@@ -1004,7 +1015,12 @@ void Element::validateText() {
 			: contextDependentText.links;
 		setTextWithLinks(markedText, customLinks);
 	} else {
-		setTextWithLinks(_textItem->translatedTextWithLocalEntities());
+		const auto unavailable = item->computeUnavailableReason();
+		if (!unavailable.isEmpty()) {
+			setTextWithLinks(Ui::Text::Italic(unavailable));
+		} else {
+			setTextWithLinks(_textItem->translatedTextWithLocalEntities());
+		}
 	}
 }
 
@@ -1087,7 +1103,7 @@ bool Element::computeIsAttachToPrevious(not_null<Element*> previous) {
 		const auto item = view->data();
 		return !item->isService()
 			&& !item->isEmpty()
-			&& !item->isPost()
+			&& !item->isPostHidingAuthor()
 			&& (!item->history()->peer->isMegagroup()
 				|| !view->hasOutLayout()
 				|| !item->from()->isChannel());

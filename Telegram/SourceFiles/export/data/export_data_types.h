@@ -210,10 +210,29 @@ struct Poll {
 };
 
 struct GiveawayStart {
+	std::vector<QString> countries;
 	std::vector<ChannelId> channels;
+	QString additionalPrize;
 	TimeId untilDate = 0;
+	uint64 credits = 0;
 	int quantity = 0;
 	int months = 0;
+	bool all = false;
+};
+
+struct GiveawayResults {
+	ChannelId channel = 0;
+	std::vector<PeerId> winners;
+	QString additionalPrize;
+	TimeId untilDate = 0;
+	int32 launchId = 0;
+	int additionalPeersCount = 0;
+	int winnersCount = 0;
+	int unclaimedCount = 0;
+	int months = 0;
+	uint64 credits = 0;
+	bool refunded = false;
+	bool all = false;
 };
 
 struct UserpicsSlice {
@@ -349,6 +368,7 @@ struct Media {
 		Invoice,
 		Poll,
 		GiveawayStart,
+		GiveawayResults,
 		PaidMedia,
 		UnsupportedMedia> content;
 	TimeId ttl = 0;
@@ -529,7 +549,7 @@ struct ActionWebViewDataSent {
 
 struct ActionGiftPremium {
 	Utf8String cost;
-	int months;
+	int months = 0;
 };
 
 struct ActionTopicCreate {
@@ -570,10 +590,31 @@ struct ActionGiveawayLaunch {
 struct ActionGiveawayResults {
 	int winners = 0;
 	int unclaimed = 0;
+	bool credits = false;
 };
 
 struct ActionBoostApply {
 	int boosts = 0;
+};
+
+struct ActionPaymentRefunded {
+	PeerId peerId = 0;
+	Utf8String currency;
+	uint64 amount = 0;
+	Utf8String transactionId;
+};
+
+struct ActionGiftStars {
+	Utf8String cost;
+	int credits = 0;
+};
+
+struct ActionPrizeStars {
+	PeerId peerId = 0;
+	uint64 amount = 0;
+	Utf8String transactionId;
+	int32 giveawayMsgId = 0;
+	bool isUnclaimed = false;
 };
 
 struct ServiceAction {
@@ -617,7 +658,10 @@ struct ServiceAction {
 		ActionGiftCode,
 		ActionGiveawayLaunch,
 		ActionGiveawayResults,
-		ActionBoostApply> content;
+		ActionBoostApply,
+		ActionPaymentRefunded,
+		ActionGiftStars,
+		ActionPrizeStars> content;
 };
 
 ServiceAction ParseServiceAction(

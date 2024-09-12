@@ -12,6 +12,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "chat_helpers/compose/compose_show.h"
 #include "chat_helpers/message_field.h"
 #include "chat_helpers/share_message_phrase_factory.h"
+#include "ui/controls/userpic_button.h"
 #include "ui/wrap/slide_wrap.h"
 #include "ui/widgets/fields/input_field.h"
 #include "api/api_chat_participants.h"
@@ -45,6 +46,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/menu/menu_add_action_callback_factory.h"
 #include "ui/layers/generic_box.h"
 #include "ui/delayed_activation.h"
+#include "ui/vertical_list.h"
+#include "ui/ui_utility.h"
 #include "main/main_session.h"
 #include "main/main_session_settings.h"
 #include "menu/menu_mute.h"
@@ -68,6 +71,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "info/info_memento.h"
 #include "info/channel_statistics/boosts/info_boosts_widget.h"
 #include "info/channel_statistics/earn/info_channel_earn_widget.h"
+#include "info/profile/info_profile_cover.h"
 #include "info/profile/info_profile_values.h"
 #include "info/statistics/info_statistics_widget.h"
 #include "info/stories/info_stories_widget.h"
@@ -1090,6 +1094,8 @@ void Filler::addViewStatistics() {
 		using Flag = ChannelDataFlag;
 		const auto canGetStats = (channel->flags() & Flag::CanGetStatistics);
 		const auto canViewEarn = (channel->flags() & Flag::CanViewRevenue);
+		const auto canViewCreditsEarn
+			= (channel->flags() & Flag::CanViewCreditsRevenue);
 		if (canGetStats) {
 			_addAction(tr::lng_stats_title(tr::now), [=] {
 				if (const auto strong = weak.get()) {
@@ -1107,7 +1113,7 @@ void Filler::addViewStatistics() {
 				}
 			}, &st::menuIconBoosts);
 		}
-		if (canViewEarn) {
+		if (canViewEarn || canViewCreditsEarn) {
 			_addAction(tr::lng_channel_earn_title(tr::now), [=] {
 				if (const auto strong = weak.get()) {
 					controller->showSection(Info::ChannelEarn::Make(peer));
@@ -1472,7 +1478,8 @@ void Filler::fillArchiveActions() {
 
 	const auto controller = _controller;
 	const auto hidden = controller->session().settings().archiveCollapsed();
-	{
+	const auto inmenu = controller->session().settings().archiveInMainMenu();
+	if (!inmenu) {
 		const auto text = hidden
 			? tr::lng_context_archive_expand(tr::now)
 			: tr::lng_context_archive_collapse(tr::now);
@@ -1481,7 +1488,6 @@ void Filler::fillArchiveActions() {
 			controller->session().saveSettingsDelayed();
 		}, hidden ? &st::menuIconExpand : &st::menuIconCollapse);
 	}
-	const auto inmenu = controller->session().settings().archiveInMainMenu();
 	{
 		const auto text = inmenu
 			? tr::lng_context_archive_to_list(tr::now)
@@ -1541,15 +1547,27 @@ void PeerMenuDeleteContact(
 			user->session().api().applyUpdates(result);
 		}).send();
 	};
-	controller->show(
-		Ui::MakeConfirmBox({
+	auto box = Box([=](not_null<Ui::GenericBox*> box) {
+		Ui::AddSkip(box->verticalLayout());
+		Ui::IconWithTitle(
+			box->verticalLayout(),
+			Ui::CreateChild<Ui::UserpicButton>(
+				box,
+				user,
+				st::mainMenuUserpic),
+			Ui::CreateChild<Ui::FlatLabel>(
+				box,
+				tr::lng_info_delete_contact() | Ui::Text::ToBold(),
+				box->getDelegate()->style().title));
+		Ui::ConfirmBox(box, {
 			.text = text,
 			.confirmed = deleteSure,
 			.confirmText = tr::lng_box_delete(),
-		}),
-		Ui::LayerOption::CloseOther);
+			.confirmStyle = &st::attentionBoxButton,
+		});
+	});
+	controller->show(std::move(box), Ui::LayerOption::CloseOther);
 }
-
 
 void PeerMenuDeleteTopicWithConfirmation(
 		not_null<Window::SessionNavigation*> navigation,
@@ -1561,11 +1579,28 @@ void PeerMenuDeleteTopicWithConfirmation(
 			PeerMenuDeleteTopic(navigation, strong);
 		}
 	};
-	navigation->parentController()->show(Ui::MakeConfirmBox({
-		.text = tr::lng_forum_topic_delete_sure(tr::now),
-		.confirmed = callback,
-		.confirmText = tr::lng_box_delete(),
-		.confirmStyle = &st::attentionBoxButton,
+	const auto controller = navigation->parentController();
+	controller->show(Box([=](not_null<Ui::GenericBox*> box) {
+		Ui::AddSkip(box->verticalLayout());
+		Ui::IconWithTitle(
+			box->verticalLayout(),
+			Ui::CreateChild<Info::Profile::TopicIconButton>(
+				box,
+				controller,
+				topic),
+			Ui::CreateChild<Ui::FlatLabel>(
+				box,
+				topic->title(),
+				box->getDelegate()->style().title));
+		Ui::AddSkip(box->verticalLayout());
+		Ui::AddSkip(box->verticalLayout());
+		Ui::ConfirmBox(box, {
+			.text = tr::lng_forum_topic_delete_sure(tr::now),
+			.confirmed = callback,
+			.confirmText = tr::lng_box_delete(),
+			.confirmStyle = &st::attentionBoxButton,
+			.labelPadding = st::boxRowPadding,
+		});
 	}));
 }
 
@@ -2603,7 +2638,6 @@ void ToggleHistoryArchived(
 			.duration = (archived
 				? kArchivedToastDuration
 				: Ui::Toast::kDefaultDuration),
-			.multiline = true,
 		});
 	};
 	history->session().api().toggleHistoryArchived(

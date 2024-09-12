@@ -31,6 +31,7 @@ struct BotInfo {
 
 	QString botMenuButtonText;
 	QString botMenuButtonUrl;
+	QString privacyPolicyUrl;
 
 	QString startToken;
 	Dialogs::EntryState inlineReturnTo;
@@ -40,12 +41,14 @@ struct BotInfo {
 
 	int version = 0;
 	int descriptionVersion = 0;
+	int activeUsers = 0;
 	bool inited : 1 = false;
 	bool readsAllHistory : 1 = false;
 	bool cantJoinGroups : 1 = false;
 	bool supportsAttachMenu : 1 = false;
 	bool canEditInformation : 1 = false;
 	bool supportsBusiness : 1 = false;
+	bool hasMainApp : 1 = false;
 };
 
 enum class UserDataFlag : uint32 {
@@ -182,9 +185,6 @@ public:
 	void setBirthday(Data::Birthday value);
 	void setBirthday(const tl::conditional<MTPBirthday> &value);
 
-	void setUnavailableReasons(
-		std::vector<Data::UnavailableReason> &&reasons);
-
 	int commonChatsCount() const;
 	void setCommonChatsCount(int count);
 
@@ -214,6 +214,9 @@ public:
 private:
 	auto unavailableReasons() const
 		-> const std::vector<Data::UnavailableReason> & override;
+
+	void setUnavailableReasonsList(
+		std::vector<Data::UnavailableReason> &&reasons) override;
 
 	Flags _flags;
 	Data::LastseenStatus _lastseen;

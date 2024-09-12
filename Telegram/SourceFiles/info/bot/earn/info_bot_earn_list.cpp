@@ -87,6 +87,7 @@ void InnerWidget::load() {
 
 	Info::Statistics::FillLoading(
 		this,
+		Info::Statistics::LoadingType::Earn,
 		_loaded.events_starting_with(false) | rpl::map(!rpl::mappers::_1),
 		_showFinished.events());
 
@@ -261,7 +262,7 @@ void InnerWidget::fillHistory() {
 
 	const auto sectionIndex = history->lifetime().make_state<int>(0);
 
-	const auto fill = [=](
+	const auto fill = [=, peer = _peer](
 			not_null<PeerData*> premiumBot,
 			const Data::CreditsStatusSlice &fullSlice,
 			const Data::CreditsStatusSlice &inSlice,
@@ -352,24 +353,22 @@ void InnerWidget::fillHistory() {
 		}, inner->lifetime());
 
 		const auto controller = _controller->parentController();
-		const auto entryClicked = [=](const Data::CreditsHistoryEntry &e) {
+		const auto entryClicked = [=](
+				const Data::CreditsHistoryEntry &e,
+				const Data::SubscriptionEntry &s) {
 			controller->uiShow()->show(Box(
 				::Settings::ReceiptCreditsBox,
 				controller,
-				premiumBot.get(),
-				e));
+				e,
+				s));
 		};
-
-		const auto star = lifetime().make_state<QImage>(
-			Ui::GenerateStars(st::creditsTopupButton.height, 1));
 
 		Info::Statistics::AddCreditsHistoryList(
 			controller->uiShow(),
 			fullSlice,
 			fullWrap->entity(),
 			entryClicked,
-			premiumBot,
-			star,
+			peer,
 			true,
 			true);
 		Info::Statistics::AddCreditsHistoryList(
@@ -377,8 +376,7 @@ void InnerWidget::fillHistory() {
 			inSlice,
 			inWrap->entity(),
 			entryClicked,
-			premiumBot,
-			star,
+			peer,
 			true,
 			false);
 		Info::Statistics::AddCreditsHistoryList(
@@ -386,8 +384,7 @@ void InnerWidget::fillHistory() {
 			outSlice,
 			outWrap->entity(),
 			std::move(entryClicked),
-			premiumBot,
-			star,
+			peer,
 			false,
 			true);
 
@@ -398,11 +395,11 @@ void InnerWidget::fillHistory() {
 	const auto apiLifetime = history->lifetime().make_state<rpl::lifetime>();
 	rpl::single(rpl::empty) | rpl::then(
 		_stateUpdated.events()
-	) | rpl::start_with_next([=] {
+	) | rpl::start_with_next([=, peer = _peer] {
 		using Api = Api::CreditsHistory;
-		const auto apiFull = apiLifetime->make_state<Api>(_peer, true, true);
-		const auto apiIn = apiLifetime->make_state<Api>(_peer, true, false);
-		const auto apiOut = apiLifetime->make_state<Api>(_peer, false, true);
+		const auto apiFull = apiLifetime->make_state<Api>(peer, true, true);
+		const auto apiIn = apiLifetime->make_state<Api>(peer, true, false);
+		const auto apiOut = apiLifetime->make_state<Api>(peer, false, true);
 		apiFull->request({}, [=](Data::CreditsStatusSlice fullSlice) {
 			apiIn->request({}, [=](Data::CreditsStatusSlice inSlice) {
 				apiOut->request({}, [=](Data::CreditsStatusSlice outSlice) {

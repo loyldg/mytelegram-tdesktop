@@ -1528,6 +1528,11 @@ void ComposeControls::init() {
 		saveFieldToHistoryLocalDraft();
 	}, _wrap->lifetime());
 
+	Core::App().settings().sendSubmitWayValue(
+	) | rpl::start_with_next([=] {
+		updateSubmitSettings();
+	}, _wrap->lifetime());
+
 	session().attachWebView().attachBotsUpdates(
 	) | rpl::start_with_next([=] {
 		updateAttachBotsMenu();
@@ -3415,7 +3420,7 @@ Fn<void()> ComposeControls::restoreTextCallback(
 			cursor.setPosition(position, QTextCursor::KeepAnchor);
 		}
 		_field->setTextCursor(cursor);
-		if (!insertTextOnCancel.isEmpty()) {
+		if (Ui::InsertTextOnImageCancel(insertTextOnCancel)) {
 			_field->textCursor().insertText(insertTextOnCancel);
 		}
 	});

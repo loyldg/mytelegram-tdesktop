@@ -79,6 +79,8 @@ constexpr auto kTransactionsLimit = 100;
 		.credits = tl.data().vstars().v,
 		.bareMsgId = uint64(tl.data().vmsg_id().value_or_empty()),
 		.barePeerId = barePeerId,
+		.bareGiveawayMsgId = uint64(
+			tl.data().vgiveaway_post_id().value_or_empty()),
 		.peerType = tl.data().vpeer().match([](const HistoryPeerTL &) {
 			return Data::CreditsHistoryEntry::PeerType::Peer;
 		}, [](const MTPDstarsTransactionPeerPlayMarket &) {
@@ -94,31 +96,70 @@ constexpr auto kTransactionsLimit = 100;
 		}, [](const MTPDstarsTransactionPeerAds &) {
 			return Data::CreditsHistoryEntry::PeerType::Ads;
 		}),
-		.refunded = tl.data().is_refund(),
-		.pending = tl.data().is_pending(),
-		.failed = tl.data().is_failed(),
+		.subscriptionUntil = tl.data().vsubscription_period()
+			? base::unixtime::parse(base::unixtime::now()
+				+ tl.data().vsubscription_period()->v)
+			: QDateTime(),
 		.successDate = tl.data().vtransaction_date()
 			? base::unixtime::parse(tl.data().vtransaction_date()->v)
 			: QDateTime(),
 		.successLink = qs(tl.data().vtransaction_url().value_or_empty()),
+		.reaction = tl.data().is_reaction(),
+		.refunded = tl.data().is_refund(),
+		.pending = tl.data().is_pending(),
+		.failed = tl.data().is_failed(),
 		.in = (int64(tl.data().vstars().v) >= 0),
+		.gift = tl.data().is_gift(),
+	};
+}
+
+[[nodiscard]] Data::SubscriptionEntry SubscriptionFromTL(
+		const MTPStarsSubscription &tl) {
+	return Data::SubscriptionEntry{
+		.id = qs(tl.data().vid()),
+		.inviteHash = qs(tl.data().vchat_invite_hash().value_or_empty()),
+		.until = base::unixtime::parse(tl.data().vuntil_date().v),
+		.subscription = Data::PeerSubscription{
+			.credits = tl.data().vpricing().data().vamount().v,
+			.period = tl.data().vpricing().data().vperiod().v,
+		},
+		.barePeerId = peerFromMTP(tl.data().vpeer()).value,
+		.cancelled = tl.data().is_canceled(),
+		.expired = (base::unixtime::now() > tl.data().vuntil_date().v),
+		.canRefulfill = tl.data().is_can_refulfill(),
 	};
 }
 
 [[nodiscard]] Data::CreditsStatusSlice StatusFromTL(
 		const MTPpayments_StarsStatus &status,
 		not_null<PeerData*> peer) {
-	peer->owner().processUsers(status.data().vusers());
-	peer->owner().processChats(status.data().vchats());
+	const auto &data = status.data();
+	peer->owner().processUsers(data.vusers());
+	peer->owner().processChats(data.vchats());
+	auto entries = std::vector<Data::CreditsHistoryEntry>();
+	if (const auto history = data.vhistory()) {
+		entries.reserve(history->v.size());
+		for (const auto &tl : history->v) {
+			entries.push_back(HistoryFromTL(tl, peer));
+		}
+	}
+	auto subscriptions = std::vector<Data::SubscriptionEntry>();
+	if (const auto history = data.vsubscriptions()) {
+		subscriptions.reserve(history->v.size());
+		for (const auto &tl : history->v) {
+			subscriptions.push_back(SubscriptionFromTL(tl));
+		}
+	}
 	return Data::CreditsStatusSlice{
-		.list = ranges::views::all(
-			status.data().vhistory().v
-		) | ranges::views::transform([&](const MTPStarsTransaction &tl) {
-			return HistoryFromTL(tl, peer);
-		}) | ranges::to_vector,
+		.list = std::move(entries),
+		.subscriptions = std::move(subscriptions),
 		.balance = status.data().vbalance().v,
+		.subscriptionsMissingBalance
+			= status.data().vsubscriptions_missing_balance().value_or_empty(),
 		.allLoaded = !status.data().vnext_offset().has_value(),
 		.token = qs(status.data().vnext_offset().value_or_empty()),
+		.tokenSubscriptions = qs(
+			status.data().vsubscriptions_next_offset().value_or_empty()),
 	};
 }
 
@@ -133,12 +174,12 @@ rpl::producer<rpl::no_value, QString> CreditsTopupOptions::request() {
 	return [=](auto consumer) {
 		auto lifetime = rpl::lifetime();
 
-		using TLOption = MTPStarsTopupOption;
-		_api.request(MTPpayments_GetStarsTopupOptions(
-		)).done([=](const MTPVector<TLOption> &result) {
-			_options = ranges::views::all(
-				result.v
-			) | ranges::views::transform([](const TLOption &option) {
+		const auto giftBarePeerId = !_peer->isSelf() ? _peer->id.value : 0;
+
+		const auto optionsFromTL = [giftBarePeerId](const auto &options) {
+			return ranges::views::all(
+				options
+			) | ranges::views::transform([=](const auto &option) {
 				return Data::CreditTopupOption{
 					.credits = option.data().vstars().v,
 					.product = qs(
@@ -146,15 +187,38 @@ rpl::producer<rpl::no_value, QString> CreditsTopupOptions::request() {
 					.currency = qs(option.data().vcurrency()),
 					.amount = option.data().vamount().v,
 					.extended = option.data().is_extended(),
+					.giftBarePeerId = giftBarePeerId,
 				};
 			}) | ranges::to_vector;
-			consumer.put_done();
-		}).fail([=](const MTP::Error &error) {
+		};
+		const auto fail = [=](const MTP::Error &error) {
 			consumer.put_error_copy(error.type());
-		}).send();
+		};
+
+		if (_peer->isSelf()) {
+			using TLOption = MTPStarsTopupOption;
+			_api.request(MTPpayments_GetStarsTopupOptions(
+			)).done([=](const MTPVector<TLOption> &result) {
+				_options = optionsFromTL(result.v);
+				consumer.put_done();
+			}).fail(fail).send();
+		} else if (const auto user = _peer->asUser()) {
+			using TLOption = MTPStarsGiftOption;
+			_api.request(MTPpayments_GetStarsGiftOptions(
+				MTP_flags(MTPpayments_GetStarsGiftOptions::Flag::f_user_id),
+				user->inputUser
+			)).done([=](const MTPVector<TLOption> &result) {
+				_options = optionsFromTL(result.v);
+				consumer.put_done();
+			}).fail(fail).send();
+		}
 
 		return lifetime;
 	};
+}
+
+Data::CreditTopupOptions CreditsTopupOptions::options() const {
+	return _options;
 }
 
 CreditsStatus::CreditsStatus(not_null<PeerData*> peer)
@@ -175,10 +239,14 @@ void CreditsStatus::request(
 		_peer->isSelf() ? MTP_inputPeerSelf() : _peer->input
 	)).done([=](const TLResult &result) {
 		_requestId = 0;
-		done(StatusFromTL(result, _peer));
+		if (const auto onstack = done) {
+			onstack(StatusFromTL(result, _peer));
+		}
 	}).fail([=] {
 		_requestId = 0;
-		done({});
+		if (const auto onstack = done) {
+			onstack({});
+		}
 	}).send();
 }
 
@@ -200,6 +268,7 @@ void CreditsHistory::request(
 	}
 	_requestId = _api.request(MTPpayments_GetStarsTransactions(
 		MTP_flags(_flags),
+		MTPstring(), // subscription_id
 		_peer->isSelf() ? MTP_inputPeerSelf() : _peer->input,
 		MTP_string(token),
 		MTP_int(kTransactionsLimit)
@@ -212,8 +281,23 @@ void CreditsHistory::request(
 	}).send();
 }
 
-Data::CreditTopupOptions CreditsTopupOptions::options() const {
-	return _options;
+void CreditsHistory::requestSubscriptions(
+		const Data::CreditsStatusSlice::OffsetToken &token,
+		Fn<void(Data::CreditsStatusSlice)> done) {
+	if (_requestId) {
+		return;
+	}
+	_requestId = _api.request(MTPpayments_GetStarsSubscriptions(
+		MTP_flags(0),
+		_peer->isSelf() ? MTP_inputPeerSelf() : _peer->input,
+		MTP_string(token)
+	)).done([=](const MTPpayments_StarsStatus &result) {
+		_requestId = 0;
+		done(StatusFromTL(result, _peer));
+	}).fail([=] {
+		_requestId = 0;
+		done({});
+	}).send();
 }
 
 rpl::producer<not_null<PeerData*>> PremiumPeerBot(
@@ -301,6 +385,60 @@ rpl::producer<rpl::no_value, QString> CreditsEarnStatistics::request() {
 
 Data::CreditsEarnStatistics CreditsEarnStatistics::data() const {
 	return _data;
+}
+
+CreditsGiveawayOptions::CreditsGiveawayOptions(not_null<PeerData*> peer)
+: _peer(peer)
+, _api(&peer->session().api().instance()) {
+}
+
+rpl::producer<rpl::no_value, QString> CreditsGiveawayOptions::request() {
+	return [=](auto consumer) {
+		auto lifetime = rpl::lifetime();
+
+		using TLOption = MTPStarsGiveawayOption;
+
+		const auto optionsFromTL = [=](const auto &options) {
+			return ranges::views::all(
+				options
+			) | ranges::views::transform([=](const auto &option) {
+				return Data::CreditsGiveawayOption{
+					.winners = ranges::views::all(
+						option.data().vwinners().v
+					) | ranges::views::transform([](const auto &winner) {
+						return Data::CreditsGiveawayOption::Winner{
+							.users = winner.data().vusers().v,
+							.perUserStars = winner.data().vper_user_stars().v,
+							.isDefault = winner.data().is_default(),
+						};
+					}) | ranges::to_vector,
+					.storeProduct = qs(
+						option.data().vstore_product().value_or_empty()),
+					.currency = qs(option.data().vcurrency()),
+					.amount = option.data().vamount().v,
+					.credits = option.data().vstars().v,
+					.yearlyBoosts = option.data().vyearly_boosts().v,
+					.isExtended = option.data().is_extended(),
+					.isDefault = option.data().is_default(),
+				};
+			}) | ranges::to_vector;
+		};
+		const auto fail = [=](const MTP::Error &error) {
+			consumer.put_error_copy(error.type());
+		};
+
+		_api.request(MTPpayments_GetStarsGiveawayOptions(
+		)).done([=](const MTPVector<TLOption> &result) {
+			_options = optionsFromTL(result.v);
+			consumer.put_done();
+		}).fail(fail).send();
+
+		return lifetime;
+	};
+}
+
+Data::CreditsGiveawayOptions CreditsGiveawayOptions::options() const {
+	return _options;
 }
 
 } // namespace Api

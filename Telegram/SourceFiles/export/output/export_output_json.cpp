@@ -615,6 +615,7 @@ QByteArray SerializeMessage(
 		pushAction("giveaway_results");
 		push("winners", data.winners);
 		push("unclaimed", data.unclaimed);
+		push("stars", data.credits);
 	}, [&](const ActionSetChatWallPaper &data) {
 		pushActor();
 		pushAction(data.same
@@ -625,6 +626,31 @@ QByteArray SerializeMessage(
 		pushActor();
 		pushAction("boost_apply");
 		push("boosts", data.boosts);
+	}, [&](const ActionPaymentRefunded &data) {
+		pushAction("refunded_payment");
+		push("amount", data.amount);
+		push("currency", data.currency);
+		pushBare("peer_name", wrapPeerName(data.peerId));
+		push("peer_id", data.peerId);
+		push("charge_id", data.transactionId);
+	}, [&](const ActionGiftStars &data) {
+		pushActor();
+		pushAction("send_stars_gift");
+		if (!data.cost.isEmpty()) {
+			push("cost", data.cost);
+		}
+		if (data.credits) {
+			push("stars", data.credits);
+		}
+	}, [&](const ActionPrizeStars &data) {
+		pushActor();
+		pushAction("stars_prize");
+		push("boost_peer_id", data.peerId);
+		pushBare("boost_peer_name", wrapPeerName(data.peerId));
+		push("stars", data.amount);
+		push("is_unclaimed", data.isUnclaimed);
+		push("giveaway_msg_id", data.giveawayMsgId);
+		push("transaction_id", data.transactionId);
 	}, [](v::null_t) {});
 
 	if (v::is_null(message.action.content)) {
@@ -764,7 +790,7 @@ QByteArray SerializeMessage(
 			{ "answers", serialized }
 		}));
 	}, [&](const GiveawayStart &data) {
-		context.nesting.push_back(Context::kObject);
+		context.nesting.push_back(Context::kArray);
 		const auto channels = ranges::views::all(
 			data.channels
 		) | ranges::views::transform([&](ChannelId id) {
@@ -773,11 +799,53 @@ QByteArray SerializeMessage(
 		const auto serialized = SerializeArray(context, channels);
 		context.nesting.pop_back();
 
-		push("giveaway_information", SerializeObject(context, {
+		context.nesting.push_back(Context::kArray);
+		const auto countries = ranges::views::all(
+			data.countries
+		) | ranges::views::transform([&](const QString &code) {
+			return SerializeString(code.toUtf8());
+		}) | ranges::to_vector;
+		const auto serializedCountries = SerializeArray(context, countries);
+		context.nesting.pop_back();
+
+		const auto additionalPrize = data.additionalPrize.toUtf8();
+
+		pushBare("giveaway_information", SerializeObject(context, {
 			{ "quantity", NumberToString(data.quantity) },
 			{ "months", NumberToString(data.months) },
 			{ "until_date", SerializeDate(data.untilDate) },
 			{ "channels", serialized },
+			{ "countries", serializedCountries },
+			{ "additional_prize", SerializeString(additionalPrize) },
+			{ "stars", NumberToString(data.credits) },
+			{ "is_only_new_subscribers", (!data.all) ? "true" : "false" },
+		}));
+	}, [&](const GiveawayResults &data) {
+		context.nesting.push_back(Context::kArray);
+		const auto winners = ranges::views::all(
+			data.winners
+		) | ranges::views::transform([&](PeerId id) {
+			return NumberToString(id.value);
+		}) | ranges::to_vector;
+		const auto serialized = SerializeArray(context, winners);
+		context.nesting.pop_back();
+
+		const auto additionalPrize = data.additionalPrize.toUtf8();
+		const auto peersCount = data.additionalPeersCount;
+
+		pushBare("giveaway_results", SerializeObject(context, {
+			{ "channel", NumberToString(data.channel.bare) },
+			{ "winners", serialized },
+			{ "additional_prize", SerializeString(additionalPrize) },
+			{ "until_date", SerializeDate(data.untilDate) },
+			{ "launch_message_id", NumberToString(data.launchId) },
+			{ "additional_peers_count", NumberToString(peersCount) },
+			{ "winners_count", NumberToString(data.winnersCount) },
+			{ "unclaimed_count", NumberToString(data.unclaimedCount) },
+			{ "months", NumberToString(data.months) },
+			{ "stars", NumberToString(data.credits) },
+			{ "is_refunded", data.refunded ? "true" : "false" },
+			{ "is_only_new_subscribers", (!data.all) ? "true" : "false" },
 		}));
 	}, [&](const PaidMedia &data) {
 		push("paid_stars_amount", data.stars);
