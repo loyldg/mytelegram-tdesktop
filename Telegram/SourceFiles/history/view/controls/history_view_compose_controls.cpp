@@ -81,6 +81,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/controls/silent_toggle.h"
 #include "ui/chat/choose_send_as.h"
 #include "ui/effects/spoiler_mess.h"
+#include "webrtc/webrtc_environment.h"
 #include "window/window_adaptive.h"
 #include "window/window_session_controller.h"
 #include "mainwindow.h"
@@ -859,10 +860,6 @@ ComposeControls::ComposeControls(
 		_wrap.get(),
 		st::historyBotCommandStart)
 	: nullptr)
-, _autocomplete(std::make_unique<FieldAutocomplete>(
-	parent,
-	_show,
-	&_st.tabbed))
 , _header(std::make_unique<FieldHeader>(
 	_wrap.get(),
 	_show,
@@ -963,9 +960,11 @@ void ComposeControls::setHistory(SetHistoryArgs &&args) {
 	_header->setHistory(args);
 	registerDraftSource();
 	_selector->setCurrentPeer(history ? history->peer.get() : nullptr);
+	initFieldAutocomplete();
 	initWebpageProcess();
 	initWriteRestriction();
 	initForwardProcess();
+	updateRecordMediaState();
 	updateBotCommandShown();
 	updateLikeShown();
 	updateMessagesTTLShown();
@@ -1238,8 +1237,8 @@ void ComposeControls::raisePanels() {
 	if (_attachBotsMenu) {
 		_attachBotsMenu->raise();
 	}
-	if (_raiseEmojiSuggestions) {
-		_raiseEmojiSuggestions();
+	if (_emojiSuggestions) {
+		_emojiSuggestions->raise();
 	}
 }
 
@@ -1323,35 +1322,6 @@ void ComposeControls::hidePanelsAnimated() {
 	}
 }
 
-void ComposeControls::checkAutocomplete() {
-	if (!_history) {
-		return;
-	}
-
-	const auto peer = _history->peer;
-	const auto autocomplete = _isInlineBot
-		? AutocompleteQuery()
-		: ParseMentionHashtagBotCommandQuery(_field, _features);
-	if (!autocomplete.query.isEmpty()) {
-		if (autocomplete.query[0] == '#'
-			&& cRecentWriteHashtags().isEmpty()
-			&& cRecentSearchHashtags().isEmpty()) {
-			peer->session().local().readRecentHashtagsAndBots();
-		} else if (autocomplete.query[0] == '@'
-			&& cRecentInlineBots().isEmpty()) {
-			peer->session().local().readRecentHashtagsAndBots();
-		} else if (autocomplete.query[0] == '/'
-			&& peer->isUser()
-			&& !peer->asUser()->isBot()) {
-			return;
-		}
-	}
-	_autocomplete->showFiltered(
-		peer,
-		autocomplete.query,
-		autocomplete.fromStart);
-}
-
 void ComposeControls::hide() {
 	showStarted();
 	_hidden = true;
@@ -1361,7 +1331,9 @@ void ComposeControls::show() {
 	if (_hidden.current()) {
 		_hidden = false;
 		showFinished();
-		checkAutocomplete();
+		if (_autocomplete) {
+			_autocomplete->requestRefresh();
+		}
 	}
 }
 
@@ -1547,7 +1519,7 @@ void ComposeControls::orderControls() {
 }
 
 bool ComposeControls::showRecordButton() const {
-	return ::Media::Capture::instance()->available()
+	return _canRecordAudioMessage
 		&& !_voiceRecordBar->isListenState()
 		&& !_voiceRecordBar->isRecordingByAnotherBar()
 		&& !HasSendText(_field)
@@ -1630,10 +1602,6 @@ void ComposeControls::initField() {
 	) | rpl::start_with_next([=] {
 		escape();
 	}, _field->lifetime());
-	_field->tabbed(
-	) | rpl::start_with_next([=] {
-		fieldTabbed();
-	}, _field->lifetime());
 	_field->heightChanges(
 	) | rpl::start_with_next([=] {
 		updateHeight();
@@ -1664,21 +1632,6 @@ void ComposeControls::initField() {
 	_field->setEditLinkCallback(
 		DefaultEditLinkCallback(_show, _field, &_st.boxField));
 	_field->setEditLanguageCallback(DefaultEditLanguageCallback(_show));
-	initAutocomplete();
-	const auto allow = [=](not_null<DocumentData*> emoji) {
-		return _history
-			&& Data::AllowEmojiWithoutPremium(_history->peer, emoji);
-	};
-	const auto suggestions = Ui::Emoji::SuggestionsController::Init(
-		_panelsParent,
-		_field,
-		_session,
-		{
-			.suggestCustomEmoji = true,
-			.allowCustomWithoutPremium = allow,
-			.st = &_st.suggestions,
-		});
-	_raiseEmojiSuggestions = [=] { suggestions->raise(); };
 
 	const auto rawTextEdit = _field->rawTextEdit().get();
 	rpl::merge(
@@ -1698,119 +1651,65 @@ void ComposeControls::updateSubmitSettings() {
 	_field->setSubmitSettings(settings);
 }
 
-void ComposeControls::initAutocomplete() {
-	const auto insertHashtagOrBotCommand = [=](
-			const QString &string,
-			FieldAutocomplete::ChooseMethod method) {
-		// Send bot command at once, if it was not inserted by pressing Tab.
-		if (string.at(0) == '/' && method != FieldAutocomplete::ChooseMethod::ByTab) {
-			_sendCommandRequests.fire_copy(string);
-			setText(
-				_field->getTextWithTagsPart(_field->textCursor().position()));
-		} else {
-			_field->insertTag(string);
-		}
-	};
-
-	_autocomplete->mentionChosen(
-	) | rpl::start_with_next([=](FieldAutocomplete::MentionChosen data) {
-		const auto user = data.user;
-		if (data.mention.isEmpty()) {
-			_field->insertTag(
-				user->firstName.isEmpty() ? user->name() : user->firstName,
-				PrepareMentionTag(user));
-		} else {
-			_field->insertTag('@' + data.mention);
-		}
-	}, _autocomplete->lifetime());
-
-	_autocomplete->hashtagChosen(
-	) | rpl::start_with_next([=](FieldAutocomplete::HashtagChosen data) {
-		insertHashtagOrBotCommand(data.hashtag, data.method);
-	}, _autocomplete->lifetime());
-
-	_autocomplete->botCommandChosen(
-	) | rpl::start_with_next([=](FieldAutocomplete::BotCommandChosen data) {
-		insertHashtagOrBotCommand(data.command, data.method);
-	}, _autocomplete->lifetime());
-
-	_autocomplete->stickerChosen(
-	) | rpl::start_with_next([=](FieldAutocomplete::StickerChosen data) {
-		if (!_showSlowmodeError || !_showSlowmodeError()) {
-			setText({});
-		}
-		//_saveDraftText = true;
-		//_saveDraftStart = crl::now();
-		//saveDraft();
-		//saveCloudDraft(); // won't be needed if SendInlineBotResult will clear the cloud draft
-		_fileChosen.fire(std::move(data));
-	}, _autocomplete->lifetime());
-
-	_autocomplete->choosingProcesses(
-	) | rpl::start_with_next([=](FieldAutocomplete::Type type) {
-		if (type == FieldAutocomplete::Type::Stickers) {
+void ComposeControls::initFieldAutocomplete() {
+	_emojiSuggestions = nullptr;
+	_autocomplete = nullptr;
+	if (!_history) {
+		return;
+	}
+	ChatHelpers::InitFieldAutocomplete(_autocomplete, {
+		.parent = _parent,
+		.show = _show,
+		.field = _field.get(),
+		.stOverride = &_st.tabbed,
+		.peer = _history->peer,
+		.features = [=] {
+			auto result = _features;
+			if (_inlineBot && !_inlineLookingUpBot) {
+				result.autocompleteMentions = false;
+				result.autocompleteHashtags = false;
+				result.autocompleteCommands = false;
+			}
+			if (isEditingMessage()) {
+				result.autocompleteCommands = false;
+				result.suggestStickersByEmoji = false;
+			}
+			return result;
+		},
+		.sendMenuDetails = [=] { return sendMenuDetails(); },
+		.stickerChoosing = [=] {
 			_sendActionUpdates.fire({
 				.type = Api::SendProgressType::ChooseSticker,
 			});
-		}
-	}, _autocomplete->lifetime());
-
-	_autocomplete->setSendMenuDetails([=] { return sendMenuDetails(); });
-
-	//_autocomplete->setModerateKeyActivateCallback([=](int key) {
-	//	return _keyboard->isHidden()
-	//		? false
-	//		: _keyboard->moderateKeyActivate(key);
-	//});
-
-	_field->rawTextEdit()->installEventFilter(_autocomplete.get());
-
-	_session->data().botCommandsChanges(
-	) | rpl::filter([=](not_null<PeerData*> peer) {
-		return _history && (_history->peer == peer);
-	}) | rpl::start_with_next([=] {
-		if (_autocomplete->clearFilteredBotCommands()) {
-			checkAutocomplete();
-		}
-	}, _autocomplete->lifetime());
-
-	_session->data().stickers().updated(
-		Data::StickersType::Stickers
-	) | rpl::start_with_next([=] {
-		updateStickersByEmoji();
-	}, _autocomplete->lifetime());
-
-	QObject::connect(
-		_field->rawTextEdit(),
-		&QTextEdit::cursorPositionChanged,
-		_autocomplete.get(),
-		[=] { checkAutocomplete(); },
-		Qt::QueuedConnection);
-
-	_autocomplete->hideFast();
-}
-
-bool ComposeControls::updateStickersByEmoji() {
-	if (!_history) {
-		return false;
-	}
-	const auto emoji = [&] {
-		const auto errorForStickers = Data::RestrictionError(
-			_history->peer,
-			ChatRestriction::SendStickers);
-		if (!isEditingMessage() && !errorForStickers) {
-			const auto &text = _field->getTextWithTags().text;
-			auto length = 0;
-			if (const auto emoji = Ui::Emoji::Find(text, &length)) {
-				if (text.size() <= length) {
-					return emoji;
-				}
+		},
+		.stickerChosen = [=](ChatHelpers::FileChosen &&data) {
+			if (!_showSlowmodeError || !_showSlowmodeError()) {
+				setText({});
 			}
-		}
-		return EmojiPtr(nullptr);
-	}();
-	_autocomplete->showStickers(emoji);
-	return (emoji != nullptr);
+			//_saveDraftText = true;
+			//_saveDraftStart = crl::now();
+			//saveDraft();
+			// Won't be needed if SendInlineBotResult clears the cloud draft.
+			//saveCloudDraft();
+			_fileChosen.fire(std::move(data));
+		},
+		.setText = [=](TextWithTags text) { setText(text); },
+		.sendBotCommand = [=](QString command) {
+			_sendCommandRequests.fire_copy(command);
+		},
+	});
+	const auto allow = [=](not_null<DocumentData*> emoji) {
+		return Data::AllowEmojiWithoutPremium(_history->peer, emoji);
+	};
+	_emojiSuggestions.reset(Ui::Emoji::SuggestionsController::Init(
+		_panelsParent,
+		_field,
+		_session,
+		{
+			.suggestCustomEmoji = true,
+			.allowCustomWithoutPremium = allow,
+			.st = &_st.suggestions,
+		}));
 }
 
 void ComposeControls::updateFieldPlaceholder() {
@@ -1867,10 +1766,9 @@ void ComposeControls::fieldChanged() {
 		updateControlsVisibility();
 		updateControlsGeometry(_wrap->size());
 	}
-	InvokeQueued(_autocomplete.get(), [=] {
+	InvokeQueued(_field.get(), [=] {
 		updateInlineBotQuery();
-		const auto choosingSticker = updateStickersByEmoji();
-		if (!choosingSticker && typing) {
+		if ((!_autocomplete || !_autocomplete->stickersEmoji()) && typing) {
 			_sendActionUpdates.fire({ Api::SendProgressType::Typing });
 		}
 	});
@@ -2021,7 +1919,11 @@ void ComposeControls::applyDraft(FieldHistoryAction fieldHistoryAction) {
 		? draft->reply.messageId
 		: FullMsgId();
 
-	InvokeQueued(_autocomplete.get(), [=] { updateStickersByEmoji(); });
+	InvokeQueued(_autocomplete.get(), [=] {
+		if (_autocomplete) {
+			_autocomplete->requestStickersUpdate();
+		}
+	});
 	const auto guard = gsl::finally([&] {
 		updateSendButtonType();
 		updateReplaceMediaButton();
@@ -2121,12 +2023,6 @@ void ComposeControls::applyDraft(FieldHistoryAction fieldHistoryAction) {
 void ComposeControls::cancelForward() {
 	_history->setForwardDraft(_topicRootId, {});
 	updateForwarding();
-}
-
-void ComposeControls::fieldTabbed() {
-	if (!_autocomplete->isHidden()) {
-		_autocomplete->chooseSelected(FieldAutocomplete::ChooseMethod::ByTab);
-	}
 }
 
 rpl::producer<SendActionUpdate> ComposeControls::sendActionUpdates() const {
@@ -2248,7 +2144,7 @@ void ComposeControls::initSendButton() {
 		_send.get(),
 		_show,
 		[=] { return sendButtonMenuDetails(); },
-		SendMenu::DefaultCallback(_show, send));
+		sendAction);
 }
 
 void ComposeControls::initSendAsButton(not_null<PeerData*> peer) {
@@ -2295,7 +2191,9 @@ void ComposeControls::clearInlineBot() {
 	if (_inlineResults) {
 		_inlineResults->clearInlineBot();
 	}
-	checkAutocomplete();
+	if (_autocomplete) {
+		_autocomplete->requestRefresh();
+	}
 }
 
 void ComposeControls::inlineBotChanged() {
@@ -2304,7 +2202,9 @@ void ComposeControls::inlineBotChanged() {
 		_isInlineBot = isInlineBot;
 		updateFieldPlaceholder();
 		updateSubmitSettings();
-		checkAutocomplete();
+		if (_autocomplete) {
+			_autocomplete->requestRefresh();
+		}
 	}
 }
 
@@ -2515,10 +2415,52 @@ void ComposeControls::initVoiceRecordBar() {
 		return false;
 	});
 
+	_voiceRecordBar->recordingTipRequests(
+	) | rpl::start_with_next([=] {
+		Core::App().settings().setRecordVideoMessages(
+			!Core::App().settings().recordVideoMessages());
+		updateSendButtonType();
+		switch (_send->type()) {
+		case Ui::SendButton::Type::Record:
+			_show->showToast(tr::lng_record_voice_tip(tr::now));
+			break;
+		case Ui::SendButton::Type::Round:
+			_show->showToast(tr::lng_record_video_tip(tr::now));
+			break;
+		}
+	}, _wrap->lifetime());
+
+	_voiceRecordBar->errors(
+	) | rpl::start_with_next([=](::Media::Capture::Error error) {
+		using Error = ::Media::Capture::Error;
+		switch (error) {
+		case Error::AudioInit:
+		case Error::AudioTimeout:
+			_show->showToast(tr::lng_record_audio_problem(tr::now));
+			break;
+		case Error::VideoInit:
+		case Error::VideoTimeout:
+			_show->showToast(tr::lng_record_video_problem(tr::now));
+			break;
+		default:
+			_show->showToast(u"Unknown error."_q);
+			break;
+		}
+	}, _wrap->lifetime());
+
 	_voiceRecordBar->updateSendButtonTypeRequests(
 	) | rpl::start_with_next([=] {
 		updateSendButtonType();
 	}, _wrap->lifetime());
+}
+
+void ComposeControls::updateRecordMediaState() {
+	::Media::Capture::instance()->check();
+	_canRecordAudioMessage = ::Media::Capture::instance()->available();
+
+	const auto environment = &Core::App().mediaDevices();
+	const auto type = Webrtc::DeviceType::Camera;
+	_canRecordVideoMessage = !environment->devices(type).empty();
 }
 
 void ComposeControls::updateWrappingVisibility() {
@@ -2556,7 +2498,10 @@ auto ComposeControls::computeSendButtonType() const {
 	} else if (_isInlineBot) {
 		return Type::Cancel;
 	} else if (showRecordButton()) {
-		return Type::Record;
+		return (Core::App().settings().recordVideoMessages()
+			&& _canRecordVideoMessage)
+			? Type::Round
+			: Type::Record;
 	}
 	return (_mode == Mode::Normal) ? Type::Send : Type::Schedule;
 }
@@ -2589,7 +2534,9 @@ void ComposeControls::updateSendButtonType() {
 	}();
 	_send->setSlowmodeDelay(delay);
 	_send->setDisabled(_sendDisabledBySlowmode.current()
-		&& (type == Type::Send || type == Type::Record));
+		&& (type == Type::Send
+			|| type == Type::Record
+			|| type == Type::Round));
 }
 
 void ComposeControls::finishAnimating() {
@@ -2977,7 +2924,9 @@ void ComposeControls::editMessage(not_null<HistoryItem*> item) {
 	}
 
 	if (_autocomplete) {
-		InvokeQueued(_autocomplete.get(), [=] { checkAutocomplete(); });
+		InvokeQueued(_autocomplete.get(), [=] {
+			_autocomplete->requestRefresh();
+		});
 	}
 }
 
@@ -3163,7 +3112,6 @@ void ComposeControls::initWebpageProcess() {
 	}) | rpl::start_with_next([=](Data::PeerUpdate::Flags flags) {
 		if (flags & Data::PeerUpdate::Flag::Rights) {
 			_preview->checkNow(false);
-			updateStickersByEmoji();
 			updateFieldPlaceholder();
 		}
 		if (flags & Data::PeerUpdate::Flag::Notifications) {
@@ -3250,8 +3198,9 @@ bool ComposeControls::isRecording() const {
 bool ComposeControls::isRecordingPressed() const {
 	return !_voiceRecordBar->isRecordingLocked()
 		&& (!_voiceRecordBar->isHidden()
-			|| (_send->type() == Ui::SendButton::Type::Record
-				&& _send->isDown()));
+			|| (_send->isDown()
+				&& (_send->type() == Ui::SendButton::Type::Record
+					|| _send->type() == Ui::SendButton::Type::Round)));
 }
 
 rpl::producer<bool> ComposeControls::recordingActiveValue() const {
@@ -3395,7 +3344,7 @@ void ComposeControls::applyInlineBotQuery(
 			updateOuterGeometry(_wrap->geometry());
 		}
 		_inlineResults->queryInlineBot(_inlineBot, _history->peer, query);
-		if (!_autocomplete->isHidden()) {
+		if (_autocomplete) {
 			_autocomplete->hideAnimated();
 		}
 	} else {

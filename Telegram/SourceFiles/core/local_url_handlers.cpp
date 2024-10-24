@@ -27,10 +27,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "payments/payments_non_panel_process.h"
 #include "boxes/share_box.h"
 #include "boxes/connection_box.h"
+#include "boxes/gift_premium_box.h"
 #include "boxes/edit_privacy_box.h"
 #include "boxes/premium_preview_box.h"
 #include "boxes/sticker_set_box.h"
 #include "boxes/sessions_box.h"
+#include "boxes/star_gift_box.h"
 #include "boxes/language_box.h"
 #include "passport/passport_form_controller.h"
 #include "ui/text/text_utilities.h"
@@ -783,9 +785,9 @@ bool CopyPeerId(
 		Window::SessionController *controller,
 		const Match &match,
 		const QVariant &context) {
-	TextUtilities::SetClipboardText(TextForMimeData{ match->captured(1) });
+	TextUtilities::SetClipboardText({ match->captured(1) });
 	if (controller) {
-		controller->showToast(tr::lng_text_copied(tr::now));
+		controller->showToast(u"ID copied to clipboard."_q);
 	}
 	return true;
 }
@@ -921,6 +923,34 @@ bool ShowCollectibleUsername(
 	const auto username = match->captured(1);
 	const auto peerId = PeerId(match->captured(2).toULongLong());
 	controller->resolveCollectible(peerId, username);
+	return true;
+}
+
+bool CopyUsernameLink(
+		Window::SessionController *controller,
+		const Match &match,
+		const QVariant &context) {
+	if (!controller) {
+		return false;
+	}
+	const auto username = match->captured(1);
+	TextUtilities::SetClipboardText({
+		controller->session().createInternalLinkFull(username)
+	});
+	controller->showToast(tr::lng_username_copied(tr::now));
+	return true;
+}
+
+bool CopyUsername(
+		Window::SessionController *controller,
+		const Match &match,
+		const QVariant &context) {
+	if (!controller) {
+		return false;
+	}
+	const auto username = match->captured(1);
+	TextUtilities::SetClipboardText({ '@' + username });
+	controller->showToast(tr::lng_username_text_copied(tr::now));
 	return true;
 }
 
@@ -1131,10 +1161,7 @@ bool ResolvePremiumMultigift(
 	if (!controller) {
 		return false;
 	}
-	const auto params = url_parse_params(
-		match->captured(1).mid(1),
-		qthelp::UrlParamNameTransform::ToLower);
-	controller->showGiftPremiumsBox(params.value(u"ref"_q, u"gift_url"_q));
+	Ui::ChooseStarGiftRecipient(controller);
 	controller->window().activate();
 	return true;
 }
@@ -1391,6 +1418,14 @@ const std::vector<LocalUrlHandler> &InternalUrlHandlers() {
 		{
 			u"^collectible_username/([a-zA-Z0-9\\-\\_\\.]+)@([0-9]+)$"_q,
 			ShowCollectibleUsername,
+		},
+		{
+			u"^username_link/([a-zA-Z0-9\\-\\_\\.]+)@([0-9]+)$"_q,
+			CopyUsernameLink,
+		},
+		{
+			u"^username_regular/([a-zA-Z0-9\\-\\_\\.]+)@([0-9]+)$"_q,
+			CopyUsername,
 		},
 		{
 			u"^stars_examples$"_q,
