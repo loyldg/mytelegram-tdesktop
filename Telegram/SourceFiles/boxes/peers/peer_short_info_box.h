@@ -37,6 +37,8 @@ enum class PeerShortInfoType {
 
 struct PeerShortInfoFields {
 	QString name;
+	QString channelName;
+	QString channelLink;
 	QString phone;
 	QString link;
 	TextWithEntities about;
@@ -162,7 +164,6 @@ public:
 private:
 	void prepare() override;
 	void prepareRows();
-	RectParts customCornersFilling() override;
 
 	void resizeEvent(QResizeEvent *e) override;
 
@@ -170,6 +171,7 @@ private:
 	int fillRoundedTopHeight();
 
 	[[nodiscard]] rpl::producer<QString> nameValue() const;
+	[[nodiscard]] rpl::producer<TextWithEntities> channelValue() const;
 	[[nodiscard]] rpl::producer<TextWithEntities> linkValue() const;
 	[[nodiscard]] rpl::producer<QString> phoneValue() const;
 	[[nodiscard]] rpl::producer<QString> usernameValue() const;

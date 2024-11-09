@@ -708,7 +708,8 @@ void ApiWrap::finalizeMessageDataRequest(
 
 QString ApiWrap::exportDirectMessageLink(
 		not_null<HistoryItem*> item,
-		bool inRepliesContext) {
+		bool inRepliesContext,
+		bool forceNonPublicLink) {
 	Expects(item->history()->peer->isChannel());
 
 	const auto itemId = item->fullId();
@@ -731,7 +732,7 @@ QString ApiWrap::exportDirectMessageLink(
 				const auto sender = root
 					? root->discussionPostOriginalSender()
 					: nullptr;
-				if (sender && sender->hasUsername()) {
+				if (sender && sender->hasUsername() && !forceNonPublicLink) {
 					// Comment to a public channel.
 					const auto forwarded = root->Get<HistoryMessageForwarded>();
 					linkItemId = forwarded->savedFromMsgId;
@@ -747,7 +748,7 @@ QString ApiWrap::exportDirectMessageLink(
 				}
 			}
 		}
-		const auto base = linkChannel->hasUsername()
+		const auto base = (linkChannel->hasUsername() && !forceNonPublicLink)
 			? linkChannel->username()
 			: "c/" + QString::number(peerToChannel(linkChannel->id).bare);
 		const auto post = QString::number(linkItemId.bare);
@@ -761,6 +762,7 @@ QString ApiWrap::exportDirectMessageLink(
 				? (QString::number(linkThreadId.bare) + '/' + post)
 				: post);
 		if (linkChannel->hasUsername()
+			&& !forceNonPublicLink
 			&& !linkChannel->isMegagroup()
 			&& !linkCommentId
 			&& !linkThreadId) {
@@ -774,6 +776,9 @@ QString ApiWrap::exportDirectMessageLink(
 		}
 		return session().createInternalLinkFull(query);
 	};
+	if (forceNonPublicLink) {
+		return fallback();
+	}
 	const auto i = _unlikelyMessageLinks.find(itemId);
 	const auto current = (i != end(_unlikelyMessageLinks))
 		? i->second
@@ -2028,7 +2033,7 @@ void ApiWrap::deleteHistory(
 	}
 	if (const auto channel = peer->asChannel()) {
 		if (!justClear && !revoke) {
-			channel->ptsWaitingForShortPoll(-1);
+			channel->ptsSetWaitingForShortPoll(-1);
 			leaveChannel(channel);
 		} else {
 			if (const auto migrated = peer->migrateFrom()) {
@@ -2585,7 +2590,7 @@ void ApiWrap::gotWebPages(ChannelData *channel, const MTPmessages_Messages &resu
 void ApiWrap::updateStickers() {
 	const auto now = crl::now();
 	requestStickers(now);
-	requestRecentStickers(now);
+	requestRecentStickers(now, false);
 	requestFavedStickers(now);
 	requestFeaturedStickers(now);
 }
@@ -2607,8 +2612,15 @@ void ApiWrap::updateCustomEmoji() {
 	requestFeaturedEmoji(now);
 }
 
-void ApiWrap::requestRecentStickersForce(bool attached) {
-	requestRecentStickersWithHash(0, attached);
+void ApiWrap::requestSpecialStickersForce(
+		bool faved,
+		bool recent,
+		bool attached) {
+	if (faved) {
+		requestFavedStickers(std::nullopt);
+	} else if (recent || attached) {
+		requestRecentStickers(std::nullopt, attached);
+	}
 }
 
 void ApiWrap::setGroupStickerSet(
@@ -2761,18 +2773,17 @@ void ApiWrap::requestCustomEmoji(TimeId now) {
 	}).send();
 }
 
-void ApiWrap::requestRecentStickers(TimeId now, bool attached) {
-	const auto needed = attached
-		? _session->data().stickers().recentAttachedUpdateNeeded(now)
-		: _session->data().stickers().recentUpdateNeeded(now);
+void ApiWrap::requestRecentStickers(
+		std::optional<TimeId> now,
+		bool attached) {
+	const auto needed = !now
+		? true
+		: attached
+		? _session->data().stickers().recentAttachedUpdateNeeded(*now)
+		: _session->data().stickers().recentUpdateNeeded(*now);
 	if (!needed) {
 		return;
 	}
-	requestRecentStickersWithHash(
-		Api::CountRecentStickersHash(_session, attached), attached);
-}
-
-void ApiWrap::requestRecentStickersWithHash(uint64 hash, bool attached) {
 	const auto requestId = [=]() -> mtpRequestId & {
 		return attached
 			? _recentAttachedStickersUpdateRequest
@@ -2795,7 +2806,7 @@ void ApiWrap::requestRecentStickersWithHash(uint64 hash, bool attached) {
 		: MTPmessages_getRecentStickers::Flags(0);
 	requestId() = request(MTPmessages_GetRecentStickers(
 		MTP_flags(flags),
-		MTP_long(hash)
+		MTP_long(now ? Api::CountRecentStickersHash(_session, attached) : 0)
 	)).done([=](const MTPmessages_RecentStickers &result) {
 		finish();
 
@@ -2822,13 +2833,15 @@ void ApiWrap::requestRecentStickersWithHash(uint64 hash, bool attached) {
 	}).send();
 }
 
-void ApiWrap::requestFavedStickers(TimeId now) {
-	if (!_session->data().stickers().favedUpdateNeeded(now)
-		|| _favedStickersUpdateRequest) {
-		return;
+void ApiWrap::requestFavedStickers(std::optional<TimeId> now) {
+	if (now) {
+		if (!_session->data().stickers().favedUpdateNeeded(*now)
+			|| _favedStickersUpdateRequest) {
+			return;
+		}
 	}
 	_favedStickersUpdateRequest = request(MTPmessages_GetFavedStickers(
-		MTP_long(Api::CountFavedStickersHash(_session))
+		MTP_long(now ? Api::CountFavedStickersHash(_session) : 0)
 	)).done([=](const MTPmessages_FavedStickers &result) {
 		_session->data().stickers().setLastFavedUpdate(crl::now());
 		_favedStickersUpdateRequest = 0;
@@ -3274,9 +3287,8 @@ void ApiWrap::forwardMessages(
 	if (!action.options.scheduled && !action.options.shortcutId) {
 		histories.readInbox(history);
 	}
-	const auto anonymousPost = peer->amAnonymous();
-	const auto silentPost = ShouldSendSilent(peer, action.options);
 	const auto sendAs = action.options.sendAs;
+	const auto silentPost = ShouldSendSilent(peer, action.options);
 
 	using SendFlag = MTPmessages_ForwardMessages::Flag;
 	auto flags = MessageFlags();
@@ -3322,6 +3334,7 @@ void ApiWrap::forwardMessages(
 		}
 		const auto requestType = Data::Histories::RequestType::Send;
 		const auto idsCopy = localIds;
+		const auto scheduled = action.options.scheduled;
 		histories.sendRequest(history, requestType, [=](Fn<void()> finish) {
 			history->sendRequestId = request(MTPmessages_ForwardMessages(
 				MTP_flags(sendFlags),
@@ -3334,6 +3347,9 @@ void ApiWrap::forwardMessages(
 				(sendAs ? sendAs->input : MTP_inputPeerEmpty()),
 				Data::ShortcutIdToMTP(_session, action.options.shortcutId)
 			)).done([=](const MTPUpdates &result) {
+				if (!scheduled) {
+					this->updates().checkForSentToScheduled(result);
+				}
 				applyUpdates(result);
 				if (shared && !--shared->requestsLeft) {
 					shared->callback();
@@ -3367,23 +3383,14 @@ void ApiWrap::forwardMessages(
 			const auto newId = FullMsgId(
 				peer->id,
 				_session->data().nextLocalMessageId());
-			const auto self = _session->user();
-			const auto messageFromId = sendAs
-				? sendAs->id
-				: anonymousPost
-				? PeerId(0)
-				: self->id;
-			const auto messagePostAuthor = peer->isBroadcast()
-				? self->name()
-				: QString();
 			history->addNewLocalMessage({
 				.id = newId.msg,
 				.flags = flags,
-				.from = messageFromId,
+				.from = NewMessageFromId(action),
 				.replyTo = { .topicRootId = topMsgId },
-				.date = HistoryItem::NewMessageDate(action.options),
+				.date = NewMessageDate(action.options),
 				.shortcutId = action.options.shortcutId,
-				.postAuthor = messagePostAuthor,
+				.postAuthor = NewMessagePostAuthor(action),
 
 				// forwarded messages don't have effects
 				//.effectId = action.options.effectId,
@@ -3458,8 +3465,6 @@ void ApiWrap::sendSharedContact(
 	const auto newId = FullMsgId(
 		peer->id,
 		_session->data().nextLocalMessageId());
-	const auto anonymousPost = peer->amAnonymous();
-
 	auto flags = NewMessageFlags(peer);
 	if (action.replyTo) {
 		flags |= MessageFlag::HasReplyInfo;
@@ -3471,22 +3476,14 @@ void ApiWrap::sendSharedContact(
 	if (action.options.shortcutId) {
 		flags |= MessageFlag::ShortcutMessage;
 	}
-	const auto messageFromId = action.options.sendAs
-		? action.options.sendAs->id
-		: anonymousPost
-		? PeerId()
-		: _session->userPeerId();
-	const auto messagePostAuthor = peer->isBroadcast()
-		? _session->user()->name()
-		: QString();
 	const auto item = history->addNewLocalMessage({
 		.id = newId.msg,
 		.flags = flags,
-		.from = messageFromId,
+		.from = NewMessageFromId(action),
 		.replyTo = action.replyTo,
-		.date = HistoryItem::NewMessageDate(action.options),
+		.date = NewMessageDate(action.options),
 		.shortcutId = action.options.shortcutId,
-		.postAuthor = messagePostAuthor,
+		.postAuthor = NewMessagePostAuthor(action),
 		.effectId = action.options.effectId,
 	}, TextWithEntities(), MTP_messageMediaContact(
 		MTP_string(phone),
@@ -3514,6 +3511,7 @@ void ApiWrap::sendVoiceMessage(
 		QByteArray result,
 		VoiceWaveform waveform,
 		crl::time duration,
+		bool video,
 		const SendAction &action) {
 	const auto caption = TextWithTags();
 	const auto to = FileLoadTaskOptions(action);
@@ -3522,6 +3520,7 @@ void ApiWrap::sendVoiceMessage(
 		result,
 		duration,
 		waveform,
+		video,
 		to,
 		caption));
 }
@@ -3772,7 +3771,6 @@ void ApiWrap::sendMessage(MessageToSend &&message) {
 					MTP_string(fields.url),
 					MTP_int(page->pendingTill)));
 		}
-		const auto anonymousPost = peer->amAnonymous();
 		const auto silentPost = ShouldSendSilent(peer, action.options);
 		FillMessagePostFlags(action, peer, flags);
 		if ((exactWebPage && !ignoreWebPage && message.webPage.invert)
@@ -3800,18 +3798,10 @@ void ApiWrap::sendMessage(MessageToSend &&message) {
 			history->startSavingCloudDraft(draftTopicRootId);
 		}
 		const auto sendAs = action.options.sendAs;
-		const auto messageFromId = sendAs
-			? sendAs->id
-			: anonymousPost
-			? PeerId()
-			: _session->userPeerId();
 		if (sendAs) {
 			sendFlags |= MTPmessages_SendMessage::Flag::f_send_as;
 			mediaFlags |= MTPmessages_SendMedia::Flag::f_send_as;
 		}
-		const auto messagePostAuthor = peer->isBroadcast()
-			? _session->user()->name()
-			: QString();
 		if (action.options.scheduled) {
 			flags |= MessageFlag::IsOrWasScheduled;
 			sendFlags |= MTPmessages_SendMessage::Flag::f_schedule_date;
@@ -3829,11 +3819,11 @@ void ApiWrap::sendMessage(MessageToSend &&message) {
 		lastMessage = history->addNewLocalMessage({
 			.id = newId.msg,
 			.flags = flags,
-			.from = messageFromId,
+			.from = NewMessageFromId(action),
 			.replyTo = action.replyTo,
-			.date = HistoryItem::NewMessageDate(action.options),
+			.date = NewMessageDate(action.options),
 			.shortcutId = action.options.shortcutId,
-			.postAuthor = messagePostAuthor,
+			.postAuthor = NewMessagePostAuthor(action),
 			.effectId = action.options.effectId,
 		}, sending, media);
 		const auto done = [=](
@@ -3979,7 +3969,6 @@ void ApiWrap::sendInlineResult(
 		flags |= MessageFlag::HasReplyInfo;
 		sendFlags |= SendFlag::f_reply_to;
 	}
-	const auto anonymousPost = peer->amAnonymous();
 	const auto silentPost = ShouldSendSilent(peer, action.options);
 	FillMessagePostFlags(action, peer, flags);
 	if (silentPost) {
@@ -3998,30 +3987,22 @@ void ApiWrap::sendInlineResult(
 	}
 
 	const auto sendAs = action.options.sendAs;
-	const auto messageFromId = sendAs
-		? sendAs->id
-		: anonymousPost ? PeerId()
-		: _session->userPeerId();
 	if (sendAs) {
 		sendFlags |= MTPmessages_SendInlineBotResult::Flag::f_send_as;
 	}
-	const auto messagePostAuthor = peer->isBroadcast()
-		? _session->user()->name()
-		: QString();
-
 	_session->data().registerMessageRandomId(randomId, newId);
 
 	data->addToHistory(history, {
 		.id = newId.msg,
 		.flags = flags,
-		.from = messageFromId,
+		.from = NewMessageFromId(action),
 		.replyTo = action.replyTo,
-		.date = HistoryItem::NewMessageDate(action.options),
+		.date = NewMessageDate(action.options),
 		.shortcutId = action.options.shortcutId,
 		.viaBotId = ((bot && !action.options.hideViaBot)
 			? peerToUser(bot->id)
 			: UserId()),
-		.postAuthor = messagePostAuthor,
+		.postAuthor = NewMessagePostAuthor(action),
 	});
 
 	history->clearCloudDraft(topicRootId);
@@ -4190,8 +4171,10 @@ void ApiWrap::sendMediaWithRandomId(
 			Data::Histories::ReplyToPlaceholder(),
 			(options.price
 				? MTPInputMedia(MTP_inputMediaPaidMedia(
+					MTP_flags(0),
 					MTP_long(options.price),
-					MTP_vector<MTPInputMedia>(1, media)))
+					MTP_vector<MTPInputMedia>(1, media),
+					MTPstring()))
 				: media),
 			MTP_string(caption.text),
 			MTP_long(randomId),
@@ -4204,7 +4187,7 @@ void ApiWrap::sendMediaWithRandomId(
 		), [=](const MTPUpdates &result, const MTP::Response &response) {
 		if (done) done(true);
 		if (updateRecentStickers) {
-			requestRecentStickersForce(true);
+			requestRecentStickers(std::nullopt, true);
 		}
 	}, [=](const MTP::Error &error, const MTP::Response &response) {
 		if (done) done(false);
@@ -4253,6 +4236,7 @@ void ApiWrap::sendMultiPaidMedia(
 	auto &histories = history->owner().histories();
 	const auto peer = history->peer;
 	const auto itemId = item->fullId();
+	album->sent = true;
 	histories.sendPreparedMessage(
 		history,
 		replyTo,
@@ -4262,8 +4246,10 @@ void ApiWrap::sendMultiPaidMedia(
 			peer->input,
 			Data::Histories::ReplyToPlaceholder(),
 			MTP_inputMediaPaidMedia(
+				MTP_flags(0),
 				MTP_long(options.price),
-				MTP_vector<MTPInputMedia>(std::move(medias))),
+				MTP_vector<MTPInputMedia>(std::move(medias)),
+				MTPstring()),
 			MTP_string(caption.text),
 			MTP_long(randomId),
 			MTPReplyMarkup(),
@@ -4322,6 +4308,9 @@ void ApiWrap::sendAlbumWithCancelled(
 }
 
 void ApiWrap::sendAlbumIfReady(not_null<SendingAlbum*> album) {
+	if (album->sent) {
+		return;
+	}
 	const auto groupId = album->groupId;
 	if (album->items.empty()) {
 		_sendingAlbums.remove(groupId);
@@ -4346,6 +4335,7 @@ void ApiWrap::sendAlbumIfReady(not_null<SendingAlbum*> album) {
 		return;
 	} else if (medias.size() < 2) {
 		const auto &single = medias.front().data();
+		album->sent = true;
 		sendMediaWithRandomId(
 			sample,
 			single.vmedia(),
@@ -4372,6 +4362,7 @@ void ApiWrap::sendAlbumIfReady(not_null<SendingAlbum*> album) {
 		| (album->options.invertCaption ? Flag::f_invert_media : Flag(0));
 	auto &histories = history->owner().histories();
 	const auto peer = history->peer;
+	album->sent = true;
 	histories.sendPreparedMessage(
 		history,
 		replyTo,

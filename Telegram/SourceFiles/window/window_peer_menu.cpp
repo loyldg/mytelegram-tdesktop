@@ -7,11 +7,14 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "window/window_peer_menu.h"
 
+#include "api/api_report.h"
 #include "menu/menu_check_item.h"
 #include "boxes/share_box.h"
+#include "boxes/star_gift_box.h"
 #include "chat_helpers/compose/compose_show.h"
 #include "chat_helpers/message_field.h"
 #include "chat_helpers/share_message_phrase_factory.h"
+#include "ui/controls/userpic_button.h"
 #include "ui/wrap/slide_wrap.h"
 #include "ui/widgets/fields/input_field.h"
 #include "api/api_chat_participants.h"
@@ -35,7 +38,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "boxes/peers/edit_contact_box.h"
 #include "calls/calls_instance.h"
 #include "inline_bots/bot_attach_web_view.h" // InlineBots::PeerType.
-#include "ui/boxes/report_box.h"
+#include "ui/boxes/report_box_graphics.h"
 #include "ui/toast/toast.h"
 #include "ui/text/format_values.h"
 #include "ui/text/text_utilities.h"
@@ -45,6 +48,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/menu/menu_add_action_callback_factory.h"
 #include "ui/layers/generic_box.h"
 #include "ui/delayed_activation.h"
+#include "ui/vertical_list.h"
+#include "ui/ui_utility.h"
 #include "main/main_session.h"
 #include "main/main_session_settings.h"
 #include "menu/menu_mute.h"
@@ -68,6 +73,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "info/info_memento.h"
 #include "info/channel_statistics/boosts/info_boosts_widget.h"
 #include "info/channel_statistics/earn/info_channel_earn_widget.h"
+#include "info/profile/info_profile_cover.h"
 #include "info/profile/info_profile_values.h"
 #include "info/statistics/info_statistics_widget.h"
 #include "info/stories/info_stories_widget.h"
@@ -562,7 +568,10 @@ void Filler::addSupportInfo() {
 }
 
 void Filler::addInfo() {
-	if (_peer && (_peer->isSelf() || _peer->isRepliesChat())) {
+	if (_peer
+		&& (_peer->isSelf()
+			|| _peer->isRepliesChat()
+			|| _peer->isVerifyCodes())) {
 		return;
 	} else if (!_thread) {
 		return;
@@ -801,7 +810,8 @@ void Filler::addBlockUser() {
 	if (!user
 		|| user->isInaccessible()
 		|| user->isSelf()
-		|| user->isRepliesChat()) {
+		|| user->isRepliesChat()
+		|| user->isVerifyCodes()) {
 		return;
 	}
 	const auto window = &_controller->window();
@@ -905,7 +915,7 @@ void Filler::addReport() {
 	const auto peer = _peer;
 	const auto navigation = _controller;
 	_addAction(tr::lng_profile_report(tr::now), [=] {
-		ShowReportPeerBox(navigation, peer);
+		ShowReportMessageBox(navigation->uiShow(), peer, {}, {});
 	}, &st::menuIconReport);
 }
 
@@ -1090,6 +1100,8 @@ void Filler::addViewStatistics() {
 		using Flag = ChannelDataFlag;
 		const auto canGetStats = (channel->flags() & Flag::CanGetStatistics);
 		const auto canViewEarn = (channel->flags() & Flag::CanViewRevenue);
+		const auto canViewCreditsEarn
+			= (channel->flags() & Flag::CanViewCreditsRevenue);
 		if (canGetStats) {
 			_addAction(tr::lng_stats_title(tr::now), [=] {
 				if (const auto strong = weak.get()) {
@@ -1107,7 +1119,7 @@ void Filler::addViewStatistics() {
 				}
 			}, &st::menuIconBoosts);
 		}
-		if (canViewEarn) {
+		if (canViewEarn || canViewCreditsEarn) {
 			_addAction(tr::lng_channel_earn_title(tr::now), [=] {
 				if (const auto strong = weak.get()) {
 					controller->showSection(Info::ChannelEarn::Make(peer));
@@ -1219,15 +1231,15 @@ void Filler::addGiftPremium() {
 		|| user->isSelf()
 		|| user->isBot()
 		|| user->isNotificationsUser()
-		|| !user->canReceiveGifts()
 		|| user->isRepliesChat()
+		|| user->isVerifyCodes()
 		|| !user->session().premiumCanBuy()) {
 		return;
 	}
 
 	const auto navigation = _controller;
 	_addAction(tr::lng_profile_gift_premium(tr::now), [=] {
-		navigation->showGiftPremiumBox(user);
+		Ui::ShowStarGiftBox(navigation, user);
 	}, &st::menuIconGiftPremium);
 }
 
@@ -1409,9 +1421,9 @@ void Filler::fillHistoryActions() {
 	addToggleMuteSubmenu(true);
 	addInfo();
 	addViewAsTopics();
+	addManageChat();
 	addStoryArchive();
 	addSupportInfo();
-	addManageChat();
 	addBoostChat();
 	addCreatePoll();
 	addThemeEdit();
@@ -1472,7 +1484,8 @@ void Filler::fillArchiveActions() {
 
 	const auto controller = _controller;
 	const auto hidden = controller->session().settings().archiveCollapsed();
-	{
+	const auto inmenu = controller->session().settings().archiveInMainMenu();
+	if (!inmenu) {
 		const auto text = hidden
 			? tr::lng_context_archive_expand(tr::now)
 			: tr::lng_context_archive_collapse(tr::now);
@@ -1481,7 +1494,6 @@ void Filler::fillArchiveActions() {
 			controller->session().saveSettingsDelayed();
 		}, hidden ? &st::menuIconExpand : &st::menuIconCollapse);
 	}
-	const auto inmenu = controller->session().settings().archiveInMainMenu();
 	{
 		const auto text = inmenu
 			? tr::lng_context_archive_to_list(tr::now)
@@ -1541,15 +1553,27 @@ void PeerMenuDeleteContact(
 			user->session().api().applyUpdates(result);
 		}).send();
 	};
-	controller->show(
-		Ui::MakeConfirmBox({
+	auto box = Box([=](not_null<Ui::GenericBox*> box) {
+		Ui::AddSkip(box->verticalLayout());
+		Ui::IconWithTitle(
+			box->verticalLayout(),
+			Ui::CreateChild<Ui::UserpicButton>(
+				box,
+				user,
+				st::mainMenuUserpic),
+			Ui::CreateChild<Ui::FlatLabel>(
+				box,
+				tr::lng_info_delete_contact() | Ui::Text::ToBold(),
+				box->getDelegate()->style().title));
+		Ui::ConfirmBox(box, {
 			.text = text,
 			.confirmed = deleteSure,
 			.confirmText = tr::lng_box_delete(),
-		}),
-		Ui::LayerOption::CloseOther);
+			.confirmStyle = &st::attentionBoxButton,
+		});
+	});
+	controller->show(std::move(box), Ui::LayerOption::CloseOther);
 }
-
 
 void PeerMenuDeleteTopicWithConfirmation(
 		not_null<Window::SessionNavigation*> navigation,
@@ -1561,11 +1585,28 @@ void PeerMenuDeleteTopicWithConfirmation(
 			PeerMenuDeleteTopic(navigation, strong);
 		}
 	};
-	navigation->parentController()->show(Ui::MakeConfirmBox({
-		.text = tr::lng_forum_topic_delete_sure(tr::now),
-		.confirmed = callback,
-		.confirmText = tr::lng_box_delete(),
-		.confirmStyle = &st::attentionBoxButton,
+	const auto controller = navigation->parentController();
+	controller->show(Box([=](not_null<Ui::GenericBox*> box) {
+		Ui::AddSkip(box->verticalLayout());
+		Ui::IconWithTitle(
+			box->verticalLayout(),
+			Ui::CreateChild<Info::Profile::TopicIconButton>(
+				box,
+				controller,
+				topic),
+			Ui::CreateChild<Ui::FlatLabel>(
+				box,
+				topic->title(),
+				box->getDelegate()->style().title));
+		Ui::AddSkip(box->verticalLayout());
+		Ui::AddSkip(box->verticalLayout());
+		Ui::ConfirmBox(box, {
+			.text = tr::lng_forum_topic_delete_sure(tr::now),
+			.confirmed = callback,
+			.confirmText = tr::lng_box_delete(),
+			.confirmStyle = &st::attentionBoxButton,
+			.labelPadding = st::boxRowPadding,
+		});
 	}));
 }
 
@@ -2175,11 +2216,14 @@ QPointer<Ui::BoxContent> ShowForwardMessagesBox(
 
 	field->submits(
 	) | rpl::start_with_next([=] { submit({}); }, field->lifetime());
-	InitMessageFieldHandlers(
-		session,
-		show,
-		field,
-		[=] { return show->paused(GifPauseReason::Layer); });
+	InitMessageFieldHandlers({
+		.session = session,
+		.show = show,
+		.field = field,
+		.customEmojiPaused = [=] {
+			return show->paused(GifPauseReason::Layer);
+		},
+	});
 	field->setSubmitSettings(Core::App().settings().sendSubmitWay());
 
 	Ui::SendPendingMoveResizeEvents(comment);
@@ -2603,7 +2647,6 @@ void ToggleHistoryArchived(
 			.duration = (archived
 				? kArchivedToastDuration
 				: Ui::Toast::kDefaultDuration),
-			.multiline = true,
 		});
 	};
 	history->session().api().toggleHistoryArchived(
@@ -2682,6 +2725,53 @@ bool FillVideoChatMenu(
 			&st::menuIconStartStreamWith);
 	}
 	return has || manager;
+}
+
+void FillSenderUserpicMenu(
+		not_null<SessionController*> controller,
+		not_null<PeerData*> peer,
+		Ui::InputField *fieldForMention,
+		Dialogs::Key searchInEntry,
+		const PeerMenuCallback &addAction) {
+	const auto group = (peer->isChat() || peer->isMegagroup());
+	const auto channel = peer->isChannel();
+	const auto viewProfileText = group
+		? tr::lng_context_view_group(tr::now)
+		: channel
+		? tr::lng_context_view_channel(tr::now)
+		: tr::lng_context_view_profile(tr::now);
+	addAction(viewProfileText, [=] {
+		controller->showPeerInfo(peer, Window::SectionShow::Way::Forward);
+	}, channel ? &st::menuIconInfo : &st::menuIconProfile);
+
+	const auto showHistoryText = group
+		? tr::lng_context_open_group(tr::now)
+		: channel
+		? tr::lng_context_open_channel(tr::now)
+		: tr::lng_profile_send_message(tr::now);
+	addAction(showHistoryText, [=] {
+		controller->showPeerHistory(peer, Window::SectionShow::Way::Forward);
+	}, channel ? &st::menuIconChannel : &st::menuIconChatBubble);
+
+	const auto username = peer->username();
+	const auto mention = !username.isEmpty() || peer->isUser();
+	if (const auto guard = mention ? fieldForMention : nullptr) {
+		addAction(tr::lng_context_mention(tr::now), crl::guard(guard, [=] {
+			if (!username.isEmpty()) {
+				fieldForMention->insertTag('@' + username);
+			} else {
+				fieldForMention->insertTag(
+					peer->shortName(),
+					PrepareMentionTag(peer->asUser()));
+			}
+		}), &st::menuIconUsername);
+	}
+
+	if (searchInEntry) {
+		addAction(tr::lng_context_search_from(tr::now), [=] {
+			controller->searchInChat(searchInEntry, peer);
+		}, &st::menuIconSearch);
+	}
 }
 
 bool IsUnreadThread(not_null<Data::Thread*> thread) {
