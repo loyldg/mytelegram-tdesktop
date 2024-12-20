@@ -560,7 +560,9 @@ QSize WebPage::countOptimalSize() {
 	}
 
 	// init dimensions
-	const auto skipBlockWidth = _parent->skipBlockWidth();
+	const auto skipBlockWidth = (sponsored && sponsored->hasMedia)
+		? 0
+		: _parent->skipBlockWidth();
 	auto maxWidth = skipBlockWidth;
 	auto minHeight = 0;
 
@@ -628,8 +630,13 @@ QSize WebPage::countOptimalSize() {
 		_durationWidth = st::msgDateFont->width(_duration);
 	}
 	if (!_openButton.isEmpty()) {
-		maxWidth += rect::m::sum::h(st::historyPageButtonPadding)
+		const auto w = rect::m::sum::h(st::historyPageButtonPadding)
 			+ _openButton.maxWidth();
+		if (sponsored) {
+			accumulate_max(maxWidth, w);
+		} else {
+			maxWidth += w;
+		}
 	}
 	maxWidth += rect::m::sum::h(padding);
 	minHeight += rect::m::sum::v(padding);
@@ -1070,7 +1077,7 @@ void WebPage::draw(Painter &p, const PaintContext &context) const {
 			? _parent->skipBlockWidth()
 			: 0;
 		const auto titleWidth = sponsored
-			? (paintw - _pixh - st::webPagePhotoDelta)
+			? (paintw - (_pixh ? (_pixh + st::webPagePhotoDelta) : 0))
 			: paintw;
 		_title.drawLeftElided(
 			p,
@@ -1228,8 +1235,9 @@ void WebPage::draw(Painter &p, const PaintContext &context) const {
 			.position = QPoint(
 				inner.x() + (inner.width() - _openButton.maxWidth()) / 2,
 				end + st::historyPageButtonPadding.top()),
-			.availableWidth = paintw,
+			.availableWidth = inner.width(),
 			.now = context.now,
+			.elisionLines = 1,
 		});
 	}
 }

@@ -7,9 +7,14 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include "data/data_message_reaction_id.h"
 #include "data/data_search_controller.h"
 #include "info/statistics/info_statistics_tag.h"
 #include "window/window_session_controller.h"
+
+namespace Api {
+struct WhoReadList;
+} // namespace Api
 
 namespace Data {
 class ForumTopic;
@@ -37,6 +42,17 @@ struct Tag {
 
 } // namespace Info::Downloads
 
+namespace Info::GlobalMedia {
+
+struct Tag {
+	explicit Tag(not_null<UserData*> self) : self(self) {
+	}
+
+	not_null<UserData*> self;
+};
+
+} // namespace Info::GlobalMedia
+
 namespace Info::Stories {
 
 enum class Tab {
@@ -56,6 +72,22 @@ struct Tag {
 
 } // namespace Info::Stories
 
+namespace Info::BotStarRef {
+
+enum class Type : uchar {
+	Setup,
+	Join,
+};
+struct Tag {
+	Tag(not_null<PeerData*> peer, Type type) : peer(peer), type(type) {
+	}
+
+	not_null<PeerData*> peer;
+	Type type = {};
+};
+
+} // namespace Info::BotStarRef
+
 namespace Info {
 
 class Key {
@@ -66,21 +98,38 @@ public:
 	Key(Downloads::Tag downloads);
 	Key(Stories::Tag stories);
 	Key(Statistics::Tag statistics);
+	Key(BotStarRef::Tag starref);
+	Key(GlobalMedia::Tag global);
 	Key(not_null<PollData*> poll, FullMsgId contextId);
+	Key(
+		std::shared_ptr<Api::WhoReadList> whoReadIds,
+		Data::ReactionId selected,
+		FullMsgId contextId);
 
 	PeerData *peer() const;
 	Data::ForumTopic *topic() const;
 	UserData *settingsSelf() const;
 	bool isDownloads() const;
+	bool isGlobalMedia() const;
 	PeerData *storiesPeer() const;
 	Stories::Tab storiesTab() const;
 	Statistics::Tag statisticsTag() const;
+	PeerData *starrefPeer() const;
+	BotStarRef::Type starrefType() const;
 	PollData *poll() const;
 	FullMsgId pollContextId() const;
+	std::shared_ptr<Api::WhoReadList> reactionsWhoReadIds() const;
+	Data::ReactionId reactionsSelected() const;
+	FullMsgId reactionsContextId() const;
 
 private:
 	struct PollKey {
 		not_null<PollData*> poll;
+		FullMsgId contextId;
+	};
+	struct ReactionsKey {
+		std::shared_ptr<Api::WhoReadList> whoReadIds;
+		Data::ReactionId selected;
 		FullMsgId contextId;
 	};
 	std::variant<
@@ -90,7 +139,10 @@ private:
 		Downloads::Tag,
 		Stories::Tag,
 		Statistics::Tag,
-		PollKey> _value;
+		BotStarRef::Tag,
+		GlobalMedia::Tag,
+		PollKey,
+		ReactionsKey> _value;
 
 };
 
@@ -104,8 +156,11 @@ public:
 	enum class Type {
 		Profile,
 		Media,
+		GlobalMedia,
 		CommonGroups,
 		SimilarChannels,
+		RequestsList,
+		ReactionsList,
 		SavedSublists,
 		PeerGifts,
 		Members,
@@ -114,6 +169,7 @@ public:
 		Stories,
 		PollResults,
 		Statistics,
+		BotStarRef,
 		Boosts,
 		ChannelEarn,
 		BotEarn,
@@ -122,10 +178,12 @@ public:
 	using MediaType = Storage::SharedMediaType;
 
 	Section(Type type) : _type(type) {
-		Expects(type != Type::Media && type != Type::Settings);
+		Expects(type != Type::Media
+			&& type != Type::GlobalMedia
+			&& type != Type::Settings);
 	}
-	Section(MediaType mediaType)
-	: _type(Type::Media)
+	Section(MediaType mediaType, Type type = Type::Media)
+	: _type(type)
 	, _mediaType(mediaType) {
 	}
 	Section(SettingsType settingsType)
@@ -133,15 +191,15 @@ public:
 	, _settingsType(settingsType) {
 	}
 
-	Type type() const {
+	[[nodiscard]] Type type() const {
 		return _type;
 	}
-	MediaType mediaType() const {
-		Expects(_type == Type::Media);
+	[[nodiscard]] MediaType mediaType() const {
+		Expects(_type == Type::Media || _type == Type::GlobalMedia);
 
 		return _mediaType;
 	}
-	SettingsType settingsType() const {
+	[[nodiscard]] SettingsType settingsType() const {
 		Expects(_type == Type::Settings);
 
 		return _settingsType;
@@ -173,6 +231,9 @@ public:
 	[[nodiscard]] bool isDownloads() const {
 		return key().isDownloads();
 	}
+	[[nodiscard]] bool isGlobalMedia() const {
+		return key().isGlobalMedia();
+	}
 	[[nodiscard]] PeerData *storiesPeer() const {
 		return key().storiesPeer();
 	}
@@ -182,10 +243,20 @@ public:
 	[[nodiscard]] Statistics::Tag statisticsTag() const {
 		return key().statisticsTag();
 	}
+	[[nodiscard]] PeerData *starrefPeer() const {
+		return key().starrefPeer();
+	}
+	[[nodiscard]] BotStarRef::Type starrefType() const {
+		return key().starrefType();
+	}
 	[[nodiscard]] PollData *poll() const;
 	[[nodiscard]] FullMsgId pollContextId() const {
 		return key().pollContextId();
 	}
+	[[nodiscard]] auto reactionsWhoReadIds() const
+		-> std::shared_ptr<Api::WhoReadList>;
+	[[nodiscard]] Data::ReactionId reactionsSelected() const;
+	[[nodiscard]] FullMsgId reactionsContextId() const;
 
 	virtual void setSearchEnabledByContent(bool enabled) {
 	}

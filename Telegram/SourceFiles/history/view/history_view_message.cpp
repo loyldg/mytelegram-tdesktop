@@ -1627,7 +1627,8 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 				(right
 					- (st::msgSelectionOffset * progress - st.size) / 2
 					- st::msgPadding.right() / 2
-					- st.size),
+					- st.size
+					- st::historyScroll.deltax),
 				rect::bottom(g) - st.size - st::msgSelectionBottomSkip);
 			{
 				p.setPen(QPen(st.border, st.width));
@@ -2120,6 +2121,7 @@ PointState Message::pointState(QPoint point) const {
 
 			// Entry page is always a bubble bottom.
 			auto mediaOnBottom = (mediaDisplayed && media->isBubbleBottom()) || check || (entry/* && entry->isBubbleBottom()*/);
+			auto mediaOnTop = (mediaDisplayed && media->isBubbleTop()) || (entry && entry->isBubbleTop());
 
 			if (item->repliesAreComments() || item->externalReply()) {
 				g.setHeight(g.height() - st::historyCommentsButtonHeight);
@@ -2160,11 +2162,18 @@ PointState Message::pointState(QPoint point) const {
 				trect.setHeight(trect.height() - entryHeight);
 			}
 
-			auto mediaHeight = media->height();
-			auto mediaLeft = trect.x() - st::msgPadding.left();
-			auto mediaTop = (trect.y() + trect.height() - mediaHeight);
-
-			if (point.y() >= mediaTop && point.y() < mediaTop + mediaHeight) {
+			const auto mediaHeight = mediaDisplayed ? media->height() : 0;
+			const auto mediaLeft = trect.x() - st::msgPadding.left();
+			const auto mediaTop = (!mediaDisplayed || _invertMedia)
+				? (trect.y() + (mediaOnTop ? 0 : st::mediaInBubbleSkip))
+				: (trect.y() + trect.height() - mediaHeight);
+			if (mediaDisplayed && _invertMedia) {
+				trect.setY(mediaTop
+					+ mediaHeight
+					+ (mediaOnBottom ? 0 : st::mediaInBubbleSkip));
+			}
+			if (point.y() >= mediaTop
+				&& point.y() < mediaTop + mediaHeight) {
 				return media->pointState(point - QPoint(mediaLeft, mediaTop));
 			}
 		}

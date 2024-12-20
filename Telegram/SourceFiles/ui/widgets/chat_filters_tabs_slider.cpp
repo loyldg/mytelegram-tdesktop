@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "ui/effects/ripple_animation.h"
 #include "ui/widgets/side_bar_button.h"
+#include "styles/style_dialogs.h"
 #include "styles/style_widgets.h"
 
 #include <QScrollBar>
@@ -44,21 +45,29 @@ ChatsFiltersTabs::ChatsFiltersTabs(
 	Ui::DiscreteSlider::setSelectOnPress(false);
 }
 
-int ChatsFiltersTabs::centerOfSection(int section) const {
-	const auto widths = countSectionsWidths(0);
-	auto result = 0;
-	if (section >= 0 && section < widths.size()) {
-		for (auto i = 0; i < section; i++) {
-			result += widths[i];
+bool ChatsFiltersTabs::setSectionsAndCheckChanged(
+		std::vector<QString> &&sections) {
+	const auto &was = sectionsRef();
+	const auto changed = [&] {
+		if (was.size() != sections.size()) {
+			return true;
 		}
-		result += widths[section] / 2;
+		for (auto i = 0; i < sections.size(); i++) {
+			if (was[i].label.toString() != sections[i]) {
+				return true;
+			}
+		}
+		return false;
+	}();
+	if (changed) {
+		Ui::DiscreteSlider::setSections(std::move(sections));
 	}
-	return result;
+	return changed;
 }
 
 void ChatsFiltersTabs::fitWidthToSections() {
-	const auto widths = countSectionsWidths(0);
-	resizeToWidth(ranges::accumulate(widths, .0));
+	SettingsSlider::fitWidthToSections();
+
 	_lockedFromX = calculateLockedFromX();
 
 	{
@@ -70,19 +79,19 @@ void ChatsFiltersTabs::fitWidthToSections() {
 	}
 }
 
-void ChatsFiltersTabs::setUnreadCount(int index, int unreadCount) {
+void ChatsFiltersTabs::setUnreadCount(int index, int unreadCount, bool mute) {
 	const auto it = _unreadCounts.find(index);
 	if (it == _unreadCounts.end()) {
 		if (unreadCount) {
 			_unreadCounts.emplace(index, Unread{
-				.cache = cacheUnreadCount(unreadCount),
+				.cache = cacheUnreadCount(unreadCount, mute),
 				.count = unreadCount,
 			});
 		}
 	} else {
 		if (unreadCount) {
 			it->second.count = unreadCount;
-			it->second.cache = cacheUnreadCount(unreadCount);
+			it->second.cache = cacheUnreadCount(unreadCount, mute);
 		} else {
 			_unreadCounts.erase(it);
 		}
@@ -132,7 +141,7 @@ void ChatsFiltersTabs::setLockedFrom(int index) {
 	});
 }
 
-QImage ChatsFiltersTabs::cacheUnreadCount(int count) const {
+QImage ChatsFiltersTabs::cacheUnreadCount(int count, bool muted) const {
 	const auto widthIndex = (count < 10) ? 0 : (count < 100) ? 1 : 2;
 	auto image = QImage(
 		QSize(_cachedBadgeWidths[widthIndex], _cachedBadgeHeight)
@@ -140,12 +149,18 @@ QImage ChatsFiltersTabs::cacheUnreadCount(int count) const {
 		QImage::Format_ARGB32_Premultiplied);
 	image.setDevicePixelRatio(style::DevicePixelRatio());
 	image.fill(Qt::transparent);
-	const auto string = (count > 99)
+	const auto string = (count > 999)
 		? _unreadMaxString
 		: QString::number(count);
 	{
 		auto p = QPainter(&image);
-		Ui::PaintUnreadBadge(p, string, 0, 0, _unreadSt, 0);
+		if (muted) {
+			auto copy = _unreadSt;
+			copy.muted = muted;
+			Ui::PaintUnreadBadge(p, string, 0, 0, copy, 0);
+		} else {
+			Ui::PaintUnreadBadge(p, string, 0, 0, _unreadSt, 0);
+		}
 	}
 	return image;
 }

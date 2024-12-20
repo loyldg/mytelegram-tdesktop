@@ -810,6 +810,8 @@ whoReadReactionsOver: icon{{ "menu/read_reactions", windowBoldFg }};
 whoReadReactionsDisabled: icon{{ "menu/read_reactions", menuFgDisabled }};
 whenEdited: icon {{ "menu/edited_status", windowBoldFg }};
 whenEditedOver: icon {{ "menu/edited_status", windowBoldFg }};
+whenOriginal: icon {{ "menu/forwarded_status", windowBoldFg }};
+whenOriginalOver: icon {{ "menu/forwarded_status", windowBoldFg }};
 
 reactionsTabAll: icon {{ "menu/read_reactions", windowFg }};
 reactionsTabAllSelected: icon {{ "menu/read_reactions", activeButtonFg }};
@@ -996,7 +998,7 @@ chatGiveawayStickerTop: -16px;
 chatGiveawayStickerPadding: margins(14px, -2px, 14px, 14px);
 chatGiveawayWinnersTopSkip: 25px;
 chatGiveawayBadgeFont: font(12px bold);
-chatGiveawayBadgeTop: 106px;
+chatGiveawayBadgeTop: 118px;
 chatGiveawayBadgePadding: margins(7px, 1px, 5px, 3px);
 chatGiveawayBadgeStroke: 2px;
 chatGiveawayPrizesTitleMargin: margins(11px, 16px, 11px, 4px);
@@ -1155,3 +1157,51 @@ msgSelectionCheck: RoundCheckbox(defaultPeerListCheck) {
 }
 
 sponsoredMessageBarMaxHeight: 156px;
+
+botEmojiStatusPreviewHeight: 148px;
+botEmojiStatusTitle: FlatLabel(boxTitle) {
+	style: TextStyle(defaultTextStyle) {
+		font: font(16px semibold);
+		lineHeight: 20px;
+	}
+	minWidth: 256px;
+	maxHeight: 0px;
+	align: align(top);
+}
+botEmojiStatusText: FlatLabel(defaultFlatLabel) {
+	style: boxTextStyle;
+	minWidth: 256px;
+	maxHeight: 0px;
+	align: align(top);
+}
+botEmojiStatusUserpic: UserpicButton(defaultUserpicButton) {
+	size: size(chatGiveawayPeerSize, chatGiveawayPeerSize);
+	photoSize: chatGiveawayPeerSize;
+}
+botEmojiStatusName: FlatLabel(defaultFlatLabel) {
+	minWidth: 32px;
+	maxHeight: 20px;
+}
+botEmojiStatusEmoji: FlatLabel(botEmojiStatusName) {
+	textFg: profileVerifiedCheckBg;
+}
+
+botDownloadLabel: boxLabel;
+botDownloadProgress: FlatLabel(defaultFlatLabel) {
+	textFg: windowSubTextFg;
+	style: TextStyle(defaultTextStyle) {
+		font: ttlItemTimerFont;
+	}
+}
+botDownloadCancel: IconButton {
+	width: 20px;
+	height: 20px;
+
+	icon: smallCloseIcon;
+	iconOver: smallCloseIconOver;
+	iconPosition: point(-1px, -1px);
+
+	rippleAreaPosition: point(0px, 0px);
+	rippleAreaSize: 20px;
+	ripple: defaultRippleAnimationBgOver;
+}

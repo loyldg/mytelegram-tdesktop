@@ -85,7 +85,7 @@ QByteArray RecentPeers::serialize() const {
 	auto stream = Serialize::ByteArrayWriter(size);
 	stream
 		<< quint32(AppVersion)
-		<< quint32(_list.size());
+		<< quint32(count);
 	for (const auto &peer : list) {
 		Serialize::writePeer(stream, peer);
 	}
@@ -126,7 +126,6 @@ void RecentPeers::applyLocal(QByteArray serialized) {
 				).arg(count));
 			DEBUG_LOG(("Failed bytes: %1.").arg(
 				QString::fromUtf8(serialized.mid(streamPosition).toHex())));
-			_list.clear();
 			return;
 		}
 	}

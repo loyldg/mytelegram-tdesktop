@@ -136,6 +136,9 @@ template <typename T>
 		HistoryItemCommonFields fields,
 		not_null<History*> history,
 		not_null<HistoryItem*> original) {
+	if (fields.flags & MessageFlag::FakeHistoryItem) {
+		return fields;
+	}
 	fields.flags |= NewForwardedFlags(history->peer, fields.from, original);
 	return fields;
 }
@@ -509,7 +512,8 @@ HistoryItem::HistoryItem(
 	auto config = CreateConfig();
 
 	const auto originalMedia = original->media();
-	const auto dropForwardInfo = original->computeDropForwardedInfo();
+	const auto dropForwardInfo = fields.ignoreForwardFrom
+		|| original->computeDropForwardedInfo();
 	const auto topicRootId = fields.replyTo.topicRootId;
 	config.reply.messageId = config.reply.topMessageId = topicRootId;
 	config.reply.topicPost = (topicRootId != 0) ? 1 : 0;
@@ -597,9 +601,22 @@ HistoryItem::HistoryItem(
 		}
 	}
 
-	setText(dropForwardInfo
+	const auto dropText = fields.ignoreForwardCaptions
+		&& _media
+		&& (_media->photo() || _media->document())
+		&& !_media->webpage();
+	setText(dropText
+		? TextWithEntities()
+		: dropForwardInfo
 		? DropDisallowedCustomEmoji(history->peer, original->originalText())
 		: original->originalText());
+
+	if (fields.groupedId) {
+		setGroupId(MessageGroupId::FromRaw(
+			history->peer->id,
+			fields.groupedId,
+			_flags & MessageFlag::IsOrWasScheduled));
+	}
 }
 
 HistoryItem::HistoryItem(
@@ -1301,6 +1318,38 @@ void HistoryItem::customEmojiRepaint() {
 		_flags |= MessageFlag::CustomEmojiRepainting;
 		_history->owner().requestItemRepaint(this);
 	}
+}
+
+bool HistoryItem::needsUpdateForVideoQualities(const MTPMessage &data) {
+	// When video gets the converted alt-videos lists, we need to update
+	// the message data even without edit-message update.
+	return data.match([&](const MTPDmessage &data) {
+		const auto media = data.vmedia();
+		if (!media) {
+			return false;
+		}
+		return media->match([&](const MTPDmessageMediaDocument &data) {
+			const auto document = data.vdocument();
+			const auto alts = data.valt_documents();
+			if (!document || !alts || alts->v.isEmpty()) {
+				return false;
+			}
+			const auto id = document->match([](const auto &data) {
+				return DocumentId(data.vid().v);
+			});
+			const auto existingMedia = this->media();
+			const auto existingDocument = existingMedia
+				? existingMedia->document()
+				: nullptr;
+			return !existingDocument
+				|| (existingDocument->id != id)
+				|| existingDocument->resolveQualities(this).empty();
+		}, [](const auto &) {
+			return false;
+		});
+	}, [](const auto &) {
+		return false;
+	});
 }
 
 void HistoryItem::finishEditionToEmpty() {
@@ -2244,7 +2293,7 @@ bool HistoryItem::allowsEdit(TimeId now) const {
 
 bool HistoryItem::allowsEditMedia() const {
 	return !awaitingVideoProcessing()
-		&& (!_media || _media->allowsEditMedia());
+		&& (!_media || _media->allowsEditMedia() || _media->webpage());
 }
 
 bool HistoryItem::canBeEdited() const {
@@ -2643,6 +2692,10 @@ std::vector<Data::MessageReaction> HistoryItem::reactionsWithLocal() const {
 
 int HistoryItem::reactionsPaidScheduled() const {
 	return _reactions ? _reactions->scheduledPaid() : 0;
+}
+
+bool HistoryItem::reactionsLocalAnonymous() const {
+	return _reactions ? _reactions->localPaidAnonymous() : false;
 }
 
 bool HistoryItem::reactionsAreTags() const {
@@ -4558,6 +4611,21 @@ void HistoryItem::setServiceMessageByAction(const MTPmessageAction &action) {
 		return preparePaymentSentText();
 	};
 
+	auto preparePaymentSentMe = [&](const MTPDmessageActionPaymentSentMe &data) {
+		auto result = PreparedServiceText();
+		result.text = (data.is_recurring_used()
+			? tr::lng_action_payment_bot_recurring
+			: tr::lng_action_payment_bot_done)(
+				tr::now,
+				lt_amount,
+				AmountAndStarCurrency(
+					&_history->session(),
+					data.vtotal_amount().v,
+					qs(data.vcurrency())),
+				Ui::Text::WithEntities);
+		return result;
+	};
+
 	auto prepareScreenshotTaken = [this](const MTPDmessageActionScreenshotTaken &) {
 		auto result = PreparedServiceText();
 		if (out()) {
@@ -5273,19 +5341,28 @@ void HistoryItem::setServiceMessageByAction(const MTPmessageAction &action) {
 			&_history->session(),
 			amount,
 			currency);
-		result.links.push_back(peer->createOpenLink());
-		result.text = isSelf
-			? tr::lng_action_gift_sent(tr::now,
-				lt_cost,
-				cost,
-				Ui::Text::WithEntities)
-			: tr::lng_action_gift_received(
+		const auto anonymous = _from->isServiceUser();
+		if (anonymous) {
+			result.text = tr::lng_action_gift_received_anonymous(
 				tr::now,
-				lt_user,
-				Ui::Text::Link(peer->shortName(), 1), // Link 1.
 				lt_cost,
 				cost,
 				Ui::Text::WithEntities);
+		} else {
+			result.links.push_back(peer->createOpenLink());
+			result.text = isSelf
+				? tr::lng_action_gift_sent(tr::now,
+					lt_cost,
+					cost,
+					Ui::Text::WithEntities)
+				: tr::lng_action_gift_received(
+					tr::now,
+					lt_user,
+					Ui::Text::Link(peer->shortName(), 1), // Link 1.
+					lt_cost,
+					cost,
+					Ui::Text::WithEntities);
+		}
 		return result;
 	};
 
@@ -5361,7 +5438,7 @@ void HistoryItem::setServiceMessageByAction(const MTPmessageAction &action) {
 		prepareSecureValuesSent,
 		prepareContactSignUp,
 		prepareProximityReached,
-		PrepareErrorText<MTPDmessageActionPaymentSentMe>,
+		preparePaymentSentMe,
 		PrepareErrorText<MTPDmessageActionSecureValuesSentMe>,
 		prepareGroupCall,
 		prepareInviteToGroupCall,
@@ -5530,7 +5607,7 @@ void HistoryItem::applyAction(const MTPMessageAction &action) {
 						data.vmessage()->data().ventities().v),
 				}
 				: TextWithEntities()),
-			.convertStars = int(data.vconvert_stars().v),
+			.starsConverted = int(data.vconvert_stars().value_or_empty()),
 			.limitedCount = gift.vavailability_total().value_or_empty(),
 			.limitedLeft = gift.vavailability_remains().value_or_empty(),
 			.count = int(gift.vstars().v),

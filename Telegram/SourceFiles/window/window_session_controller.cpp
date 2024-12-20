@@ -392,7 +392,7 @@ void SessionNavigation::showPeerByLink(const PeerByLinkInfo &info) {
 			} else {
 				showPeerByLinkResolved(peer, info);
 			}
-		});
+		}, info.referral);
 	} else if (const auto id = std::get_if<ChannelId>(&info.usernameOrId)) {
 		resolveChannelById(*id, [=](not_null<ChannelData*> channel) {
 			showPeerByLinkResolved(channel, info);
@@ -454,19 +454,27 @@ void SessionNavigation::resolveChatLink(
 
 void SessionNavigation::resolveUsername(
 		const QString &username,
-		Fn<void(not_null<PeerData*>)> done) {
-	if (const auto peer = _session->data().peerByUsername(username)) {
-		done(peer);
-		return;
+		Fn<void(not_null<PeerData*>)> done,
+		const QString &referral) {
+	if (referral.isEmpty()) {
+		if (const auto peer = _session->data().peerByUsername(username)) {
+			done(peer);
+			return;
+		}
 	}
 	_api.request(base::take(_resolveRequestId)).cancel();
+	using Flag = MTPcontacts_ResolveUsername::Flag;
 	_resolveRequestId = _api.request(MTPcontacts_ResolveUsername(
-		MTP_string(username)
+		MTP_flags(referral.isEmpty() ? Flag() : Flag::f_referer),
+		MTP_string(username),
+		MTP_string(referral)
 	)).done([=](const MTPcontacts_ResolvedPeer &result) {
 		resolveDone(result, done);
 	}).fail([=](const MTP::Error &error) {
 		_resolveRequestId = 0;
-		if (error.code() == 400) {
+		if (error.type() == u"STARREF_EXPIRED"_q) {
+			parentController()->showToast(tr::lng_star_ref_stopped(tr::now));
+		} else if (error.code() == 400) {
 			parentController()->show(
 				Ui::MakeInformBox(
 					tr::lng_username_not_found(tr::now, lt_user, username)),
@@ -572,7 +580,8 @@ void SessionNavigation::showPeerByLinkResolved(
 		const auto controller = parentController();
 		if (const auto forum = peer->forum()) {
 			if (controller->windowId().hasChatsList()
-				&& !controller->adaptive().isOneColumn()) {
+				&& !controller->adaptive().isOneColumn()
+				&& controller->shownForum().current() != forum) {
 				controller->showForum(forum);
 			}
 		}
@@ -637,6 +646,7 @@ void SessionNavigation::showPeerByLinkResolved(
 				.context = {
 					.controller = parentController(),
 					.action = action,
+					.fullscreen = info.botAppFullScreen,
 					.maySkipConfirmation = !info.botAppForceConfirmation,
 				},
 				.button = { .startCommand = info.startToken },
@@ -680,6 +690,8 @@ void SessionNavigation::showPeerByLinkResolved(
 			? info.messageId
 			: info.startAutoSubmit
 			? ShowAndStartBotMsgId
+			: (bot && !info.startToken.isEmpty())
+			? ShowAndMaybeStartBotMsgId
 			: ShowAtUnreadMsgId;
 		const auto attachBotUsername = info.attachBotUsername;
 		if (bot && bot->botInfo->startToken != info.startToken) {
@@ -697,14 +709,18 @@ void SessionNavigation::showPeerByLinkResolved(
 					parentController(),
 					Api::SendAction(history),
 					attachBotUsername,
-					info.attachBotToggleCommand.value_or(QString()));
+					info.attachBotToggleCommand.value_or(QString()),
+					info.botAppFullScreen);
 			});
 		} else if (bot && info.attachBotMainOpen) {
 			const auto startCommand = info.attachBotToggleCommand.value_or(
 				QString());
 			bot->session().attachWebView().open({
 				.bot = bot,
-				.context = { .controller = parentController() },
+				.context = {
+					.controller = parentController(),
+					.fullscreen = info.botAppFullScreen,
+				},
 				.button = { .startCommand = startCommand },
 				.source = InlineBots::WebViewSourceLinkBotProfile{
 					.token = startCommand,
@@ -728,6 +744,7 @@ void SessionNavigation::showPeerByLinkResolved(
 						? Api::SendAction(
 							contextUser->owner().history(contextUser))
 						: std::optional<Api::SendAction>()),
+					.fullscreen = info.botAppFullScreen,
 				},
 				.button = { .startCommand = *info.attachBotToggleCommand },
 				.source = InlineBots::WebViewSourceLinkAttachMenu{
@@ -1314,22 +1331,28 @@ SessionController::SessionController(
 		closeFolder();
 	}, lifetime());
 
+	const auto processFiltersMenu = [this] {
+		if (SessionNavigation::session().data().chatsFilters().has()) {
+			const auto isHorizontal
+				= Core::App().settings().chatFiltersHorizontal()
+					|| !enoughSpaceForFilters();
+			content()->toggleFiltersMenu(isHorizontal);
+			toggleFiltersMenu(!isHorizontal);
+		} else {
+			content()->toggleFiltersMenu(false);
+			toggleFiltersMenu(false);
+		}
+	};
 	rpl::merge(
+		enoughSpaceForFiltersValue() | rpl::skip(1) | rpl::to_empty,
 		Core::App().settings().chatFiltersHorizontalChanges() | rpl::to_empty,
 		session->data().chatsFilters().changed()
 	) | rpl::start_with_next([=] {
+		if (!_filtersActivated) {
+			processFiltersMenu();
+		}
 		checkOpenedFilter();
-		crl::on_main(this, [this] {
-			if (SessionNavigation::session().data().chatsFilters().has()) {
-				const auto isHorizontal
-					= Core::App().settings().chatFiltersHorizontal();
-				content()->toggleFiltersMenu(isHorizontal);
-				toggleFiltersMenu(!isHorizontal);
-			} else {
-				content()->toggleFiltersMenu(false);
-				toggleFiltersMenu(false);
-			}
-		});
+		crl::on_main(this, processFiltersMenu);
 	}, lifetime());
 
 	session->data().itemIdChanged(
@@ -1824,13 +1847,18 @@ bool SessionController::jumpToChatListEntry(Dialogs::RowDescriptor row) {
 	return false;
 }
 
-void SessionController::setCurrentDialogsEntryState(
+void SessionController::setDialogsEntryState(
 		Dialogs::EntryState state) {
-	_currentDialogsEntryState = state;
+	_dialogsEntryState = state;
 }
 
-Dialogs::EntryState SessionController::currentDialogsEntryState() const {
-	return _currentDialogsEntryState;
+Dialogs::EntryState SessionController::dialogsEntryStateCurrent() const {
+	return _dialogsEntryState.current();
+}
+
+auto SessionController::dialogsEntryStateValue() const
+-> rpl::producer<Dialogs::EntryState> {
+	return _dialogsEntryState.value();
 }
 
 bool SessionController::switchInlineQuery(
@@ -1857,6 +1885,10 @@ bool SessionController::switchInlineQuery(
 		int(textWithTags.text.size()),
 		Ui::kQFixedMax
 	};
+	if (to.currentReplyTo.messageId.msg == to.currentReplyTo.topicRootId
+		&& to.currentReplyTo.quote.empty()) {
+		to.currentReplyTo.messageId.msg = MsgId();
+	}
 	auto draft = std::make_unique<Data::Draft>(
 		textWithTags,
 		to.currentReplyTo,
@@ -2586,6 +2618,16 @@ not_null<MainWidget*> SessionController::content() const {
 
 int SessionController::filtersWidth() const {
 	return _filters ? st::windowFiltersWidth : 0;
+}
+
+bool SessionController::enoughSpaceForFilters() const {
+	return widget()->width() >= widget()->minimumWidth() + st::windowFiltersWidth;
+}
+
+rpl::producer<bool> SessionController::enoughSpaceForFiltersValue() const {
+	return widget()->widthValue() | rpl::map([=] {
+		return enoughSpaceForFilters();
+	}) | rpl::distinct_until_changed();
 }
 
 rpl::producer<FilterId> SessionController::activeChatsFilter() const {

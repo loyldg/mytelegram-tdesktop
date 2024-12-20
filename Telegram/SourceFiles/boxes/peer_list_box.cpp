@@ -217,16 +217,7 @@ void PeerListBox::keyPressEvent(QKeyEvent *e) {
 
 void PeerListBox::searchQueryChanged(const QString &query) {
 	scrollToY(0);
-	const auto isEmpty = content()->searchQueryChanged(query);
-	if (_specialTabsMode.enabled) {
-		_specialTabsMode.searchIsActive = !isEmpty;
-		if (_specialTabsMode.searchIsActive) {
-			_specialTabsMode.topSkip = _addedTopScrollSkip;
-			setAddedTopScrollSkip(0);
-		} else {
-			setAddedTopScrollSkip(_specialTabsMode.topSkip);
-		}
-	}
+	content()->searchQueryChanged(query);
 }
 
 void PeerListBox::resizeEvent(QResizeEvent *e) {
@@ -483,7 +474,7 @@ void PeerListBox::addSelectItem(
 void PeerListBox::addSelectItem(
 		uint64 itemId,
 		const QString &text,
-		Ui::MultiSelect::PaintRoundImage paintUserpic,
+		PaintRoundImageCallback paintUserpic,
 		anim::type animated) {
 	if (!_select) {
 		createMultiSelect();
@@ -558,13 +549,8 @@ rpl::producer<int> PeerListBox::multiSelectHeightValue() const {
 	return _select ? _select->heightValue() : rpl::single(0);
 }
 
-void PeerListBox::setSpecialTabMode(bool value) {
-	content()->setIgnoreHiddenRowsOnSearch(value);
-	if (value) {
-		_specialTabsMode.enabled = true;
-	} else {
-		_specialTabsMode = {};
-	}
+rpl::producer<> PeerListBox::noSearchSubmits() const {
+	return content()->noSearchSubmits();
 }
 
 PeerListRow::PeerListRow(not_null<PeerData*> peer)
@@ -2076,7 +2062,7 @@ void PeerListContent::checkScrollForPreload() {
 	}
 }
 
-PeerListContent::IsEmpty PeerListContent::searchQueryChanged(QString query) {
+void PeerListContent::searchQueryChanged(QString query) {
 	const auto searchWordsList = TextUtilities::PrepareSearchWords(query);
 	const auto normalizedQuery = searchWordsList.join(' ');
 	if (_ignoreHiddenRowsOnSearch && !normalizedQuery.isEmpty()) {
@@ -2133,7 +2119,6 @@ PeerListContent::IsEmpty PeerListContent::searchQueryChanged(QString query) {
 		}
 		refreshRows();
 	}
-	return _normalizedSearchQuery.isEmpty();
 }
 
 std::unique_ptr<PeerListState> PeerListContent::saveState() const {
@@ -2208,6 +2193,9 @@ bool PeerListContent::submitted() {
 			_controller->rowClicked(row);
 			return true;
 		}
+	} else {
+		_noSearchSubmits.fire({});
+		return true;
 	}
 	return false;
 }

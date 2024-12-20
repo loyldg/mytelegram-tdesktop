@@ -237,7 +237,7 @@ void AddTableRow(
 		valueMargins);
 }
 
-object_ptr<Ui::RpWidget> MakeStarGiftStarsValue(
+[[nodiscard]] object_ptr<Ui::RpWidget> MakeStarGiftStarsValue(
 		not_null<QWidget*> parent,
 		not_null<Window::SessionNavigation*> controller,
 		const Data::CreditsHistoryEntry &entry,
@@ -255,8 +255,8 @@ object_ptr<Ui::RpWidget> MakeStarGiftStarsValue(
 	auto star = session->data().customEmojiManager().creditsEmoji();
 	const auto label = Ui::CreateChild<Ui::FlatLabel>(
 		raw,
-		rpl::single(
-			star.append(' ' + Lang::FormatCountDecimal(entry.credits))),
+		rpl::single(star.append(
+			' ' + Lang::FormatStarsAmountDecimal(entry.credits))),
 		st::giveawayGiftCodeValue,
 		st::defaultPopupMenu,
 		std::move(makeContext));
@@ -266,7 +266,7 @@ object_ptr<Ui::RpWidget> MakeStarGiftStarsValue(
 			raw,
 			tr::lng_gift_sell_small(
 				lt_count_decimal,
-				rpl::single(entry.convertStars * 1.)),
+				rpl::single(entry.starsConverted * 1.)),
 			st::starGiftSmallButton)
 		: nullptr;
 	if (convert) {
@@ -284,6 +284,62 @@ object_ptr<Ui::RpWidget> MakeStarGiftStarsValue(
 		label->moveToLeft(0, 0, width);
 		if (convert) {
 			convert->moveToLeft(
+				label->width() + st::normalFont->spacew,
+				(st::giveawayGiftCodeValue.style.font->ascent
+					- st::starGiftSmallButton.style.font->ascent),
+				width);
+		}
+	}, label->lifetime());
+
+	label->heightValue() | rpl::start_with_next([=](int height) {
+		raw->resize(
+			raw->width(),
+			height + st::giveawayGiftCodeValueMargin.bottom());
+	}, raw->lifetime());
+
+	label->setAttribute(Qt::WA_TransparentForMouseEvents);
+
+	return result;
+}
+
+[[nodiscard]] object_ptr<Ui::RpWidget> MakeVisibilityTableValue(
+		not_null<QWidget*> parent,
+		not_null<Window::SessionNavigation*> controller,
+		bool savedToProfile,
+		Fn<void(bool)> toggleVisibility) {
+	auto result = object_ptr<Ui::RpWidget>(parent);
+	const auto raw = result.data();
+
+	const auto label = Ui::CreateChild<Ui::FlatLabel>(
+		raw,
+		(savedToProfile
+			? tr::lng_gift_visibility_shown()
+			: tr::lng_gift_visibility_hidden()),
+		st::giveawayGiftCodeValue,
+		st::defaultPopupMenu);
+
+	const auto toggle = Ui::CreateChild<Ui::RoundButton>(
+		raw,
+		(savedToProfile
+			? tr::lng_gift_visibility_hide()
+			: tr::lng_gift_visibility_show()),
+		st::starGiftSmallButton);
+	toggle->setTextTransform(Ui::RoundButton::TextTransform::NoTransform);
+	toggle->setClickedCallback([=] {
+		toggleVisibility(!savedToProfile);
+	});
+
+	rpl::combine(
+		raw->widthValue(),
+		toggle->widthValue()
+	) | rpl::start_with_next([=](int width, int toggleWidth) {
+		const auto toggleSkip = toggleWidth
+			? (st::normalFont->spacew + toggleWidth)
+			: 0;
+		label->resizeToNaturalWidth(width - toggleSkip);
+		label->moveToLeft(0, 0, width);
+		if (toggle) {
+			toggle->moveToLeft(
 				label->width() + st::normalFont->spacew,
 				(st::giveawayGiftCodeValue.style.font->ascent
 					- st::starGiftSmallButton.style.font->ascent),
@@ -1035,6 +1091,7 @@ void AddStarGiftTable(
 		not_null<Window::SessionNavigation*> controller,
 		not_null<Ui::VerticalLayout*> container,
 		const Data::CreditsHistoryEntry &entry,
+		Fn<void(bool)> toggleVisibility,
 		Fn<void()> convertToStars) {
 	auto table = container->add(
 		object_ptr<Ui::TableLayout>(
@@ -1044,7 +1101,8 @@ void AddStarGiftTable(
 	const auto peerId = PeerId(entry.barePeerId);
 	const auto session = &controller->session();
 	if (peerId) {
-		const auto withSendButton = entry.in;
+		const auto user = session->data().peer(peerId)->asUser();
+		const auto withSendButton = entry.in && user && !user->isBot();
 		AddTableRow(
 			table,
 			tr::lng_credits_box_history_entry_peer_in(),
@@ -1071,9 +1129,15 @@ void AddStarGiftTable(
 			rpl::single(Ui::Text::WithEntities(
 				langDateTime(entry.lastSaleDate))));
 	}
+	if (!entry.date.isNull()) {
+		AddTableRow(
+			table,
+			tr::lng_gift_link_label_date(),
+			rpl::single(Ui::Text::WithEntities(langDateTime(entry.date))));
+	}
+	const auto marginWithButton = st::giveawayGiftCodeValueMargin
+		- QMargins(0, 0, 0, st::giveawayGiftCodeValueMargin.bottom());
 	{
-		const auto margin = st::giveawayGiftCodeValueMargin
-			- QMargins(0, 0, 0, st::giveawayGiftCodeValueMargin.bottom());
 		AddTableRow(
 			table,
 			tr::lng_gift_link_label_value(),
@@ -1082,13 +1146,18 @@ void AddStarGiftTable(
 				controller,
 				entry,
 				std::move(convertToStars)),
-			margin);
+			marginWithButton);
 	}
-	if (!entry.date.isNull()) {
+	if (toggleVisibility) {
 		AddTableRow(
 			table,
-			tr::lng_gift_link_label_date(),
-			rpl::single(Ui::Text::WithEntities(langDateTime(entry.date))));
+			tr::lng_gift_visibility(),
+			MakeVisibilityTableValue(
+				table,
+				controller,
+				entry.savedToProfile,
+				std::move(toggleVisibility)),
+			marginWithButton);
 	}
 	if (entry.limitedCount > 0) {
 		auto amount = rpl::single(TextWithEntities{
@@ -1144,12 +1213,51 @@ void AddCreditsHistoryEntryTable(
 			st::giveawayGiftCodeTable),
 		st::giveawayGiftCodeTableMargin);
 	const auto peerId = PeerId(entry.barePeerId);
+	const auto actorId = PeerId(entry.bareActorId);
+	const auto starrefRecipientId = PeerId(entry.starrefRecipientId);
 	const auto session = &controller->session();
-	if (peerId) {
-		auto text = entry.in
+	if (entry.starrefCommission) {
+		if (entry.starrefAmount) {
+			AddTableRow(
+				table,
+				tr::lng_star_ref_commission_title(),
+				rpl::single(TextWithEntities{
+					QString::number(entry.starrefCommission / 10.) + '%' }));
+		} else {
+			AddTableRow(
+				table,
+				tr::lng_gift_link_label_reason(),
+				tr::lng_credits_box_history_entry_reason_star_ref(
+					Ui::Text::WithEntities));
+		}
+	}
+	if (starrefRecipientId && entry.starrefAmount) {
+		AddTableRow(
+			table,
+			tr::lng_credits_box_history_entry_affiliate(),
+			controller,
+			starrefRecipientId);
+	}
+	if (peerId && entry.starrefCommission) {
+		AddTableRow(
+			table,
+			(entry.starrefAmount
+				? tr::lng_credits_box_history_entry_referred
+				: tr::lng_credits_box_history_entry_miniapp)(),
+			controller,
+			peerId);
+	}
+	if (actorId || (!entry.starrefCommission && peerId)) {
+		auto text = entry.starrefCommission
+			? tr::lng_credits_box_history_entry_referred()
+			: entry.in
 			? tr::lng_credits_box_history_entry_peer_in()
 			: tr::lng_credits_box_history_entry_peer();
-		AddTableRow(table, std::move(text), controller, peerId);
+		AddTableRow(
+			table,
+			std::move(text),
+			controller,
+			actorId ? actorId : peerId);
 	}
 	if (const auto msgId = MsgId(peerId ? entry.bareMsgId : 0)) {
 		const auto peer = session->data().peer(peerId);
@@ -1223,7 +1331,7 @@ void AddCreditsHistoryEntryTable(
 			tr::lng_gift_link_label_gift(),
 			tr::lng_gift_stars_title(
 				lt_count,
-				rpl::single(float64(entry.credits)),
+				rpl::single(entry.credits.value()),
 				Ui::Text::RichLangValue));
 	}
 	{
@@ -1241,8 +1349,15 @@ void AddCreditsHistoryEntryTable(
 				}));
 		}
 	}
+	if (!entry.subscriptionUntil.isNull() && !entry.title.isEmpty()) {
+		AddTableRow(
+			table,
+			tr::lng_gift_link_label_reason(),
+			tr::lng_credits_box_history_entry_subscription(
+				Ui::Text::WithEntities));
+	}
 	if (!entry.id.isEmpty()) {
-		constexpr auto kOneLineCount = 18;
+		constexpr auto kOneLineCount = 24;
 		const auto oneLine = entry.id.length() <= kOneLineCount;
 		auto label = object_ptr<Ui::FlatLabel>(
 			table,
@@ -1306,11 +1421,24 @@ void AddSubscriptionEntryTable(
 			st::giveawayGiftCodeTable),
 		st::giveawayGiftCodeTableMargin);
 	const auto peerId = PeerId(s.barePeerId);
+	const auto user = peerIsUser(peerId)
+		? controller->session().data().peer(peerId)->asUser()
+		: nullptr;
 	AddTableRow(
 		table,
-		tr::lng_credits_subscription_row_to(),
+		(!s.title.isEmpty() && user && user->botInfo)
+			? tr::lng_credits_subscription_row_to_bot()
+			: (!s.title.isEmpty() && user && !user->botInfo)
+			? tr::lng_credits_subscription_row_to_business()
+			: tr::lng_credits_subscription_row_to(),
 		controller,
 		peerId);
+	if (!s.title.isEmpty()) {
+		AddTableRow(
+			table,
+			tr::lng_credits_subscription_row_to(),
+			rpl::single(Ui::Text::WithEntities(s.title)));
+	}
 	if (!s.until.isNull()) {
 		if (s.subscription.period > 0) {
 			const auto subscribed = s.until.addSecs(-s.subscription.period);
