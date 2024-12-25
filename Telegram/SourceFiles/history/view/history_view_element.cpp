@@ -2015,4 +2015,47 @@ void Element::ClearGlobal() {
 	MousedElement = nullptr;
 }
 
+int FindViewY(not_null<Element*> view, uint16 symbol, int yfrom) {
+	auto request = HistoryView::StateRequest();
+	request.flags = Ui::Text::StateRequest::Flag::LookupSymbol;
+	const auto single = st::messageTextStyle.font->height;
+	const auto inner = view->innerGeometry();
+	const auto origin = inner.topLeft();
+	const auto top = 0;
+	const auto bottom = view->height();
+	if (origin.y() < top
+		|| origin.y() + inner.height() > bottom
+		|| inner.height() <= 0) {
+		return yfrom;
+	}
+	const auto fory = [&](int y) {
+		return view->textState(origin + QPoint(0, y), request).symbol;
+	};
+	yfrom = std::max(yfrom - origin.y(), 0);
+	auto ytill = inner.height() - 1;
+	auto symbolfrom = fory(yfrom);
+	auto symboltill = fory(ytill);
+	if ((yfrom >= ytill) || (symbolfrom >= symbol)) {
+		return origin.y() + yfrom;
+	} else if (symboltill <= symbol) {
+		return origin.y() + ytill;
+	}
+	while (ytill - yfrom >= 2 * single) {
+		const auto middle = (yfrom + ytill) / 2;
+		const auto found = fory(middle);
+		if (found == symbol
+			|| symbolfrom > found
+			|| symboltill < found) {
+			return middle;
+		} else if (found < symbol) {
+			yfrom = middle;
+			symbolfrom = found;
+		} else {
+			ytill = middle;
+			symboltill = found;
+		}
+	}
+	return origin.y() + (yfrom + ytill) / 2;
+}
+
 } // namespace HistoryView

@@ -1241,19 +1241,18 @@ object_ptr<Ui::RpWidget> DetailsFiller::setupInfo() {
 			int rightSkip) {
 		const auto parent = label->parentWidget();
 		rpl::combine(
+			result->widthValue(),
 			label->geometryValue(),
 			button->sizeValue()
-		) | rpl::start_with_next([=](const QRect&, const QSize &buttonSize) {
-			const auto s = parent->size();
+		) | rpl::start_with_next([=](int width, QRect, QSize buttonSize) {
 			button->moveToRight(
 				rightSkip,
-				(s.height() - buttonSize.height()) / 2);
-			label->resizeToWidth(
-				s.width()
-					- rightSkip
-					- label->geometry().left()
-					- st::lineWidth * 2
-					- buttonSize.width());
+				(parent->height() - buttonSize.height()) / 2);
+			label->resizeToWidth(width
+				- rightSkip
+				- label->geometry().left()
+				- st::lineWidth * 2
+				- buttonSize.width());
 		}, button->lifetime());
 	};
 	const auto controller = _controller->parentController();
@@ -2079,13 +2078,10 @@ Ui::MultiSlideTracker DetailsFiller::fillDiscussionButtons(
 
 	Ui::MultiSlideTracker tracker;
 	auto window = _controller->parentController();
-	auto viewDiscussionVisible = rpl::combine(
-		_controller->wrapValue(),
-		window->dialogsEntryStateValue()
-	) | rpl::map([=](Wrap wrap, const Dialogs::EntryState &state) {
+	auto viewDiscussionVisible = window->dialogsEntryStateValue(
+	) | rpl::map([=](const Dialogs::EntryState &state) {
 		const auto history = state.key.history();
-		return (wrap == Wrap::Side)
-			&& (state.section == Dialogs::EntryState::Section::Replies)
+		return (state.section == Dialogs::EntryState::Section::Replies)
 			&& history
 			&& (history->peer == channel);
 	});
