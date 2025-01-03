@@ -13,6 +13,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "window/window_main_menu.h"
 #include "window/window_peer_menu.h"
 #include "main/main_session.h"
+#include "core/ui_integration.h"
 #include "data/data_session.h"
 #include "data/data_chat_filters.h"
 #include "data/data_user.h"
@@ -23,8 +24,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/filter_icons.h"
 #include "ui/wrap/vertical_layout.h"
 #include "ui/wrap/vertical_layout_reorder.h"
+#include "ui/widgets/menu/menu_add_action_callback_factory.h"
 #include "ui/widgets/popup_menu.h"
 #include "ui/boxes/confirm_box.h"
+#include "ui/power_saving.h"
 #include "ui/ui_utility.h"
 #include "boxes/filters/edit_filter_box.h"
 #include "boxes/premium_limits_box.h"
@@ -45,7 +48,7 @@ FiltersMenu::FiltersMenu(
 : _session(session)
 , _parent(parent)
 , _outer(_parent)
-, _menu(&_outer, QString(), st::windowFiltersMainMenu)
+, _menu(&_outer, TextWithEntities(), st::windowFiltersMainMenu)
 , _scroll(&_outer)
 , _container(
 	_scroll.setOwnedWidget(
@@ -215,7 +218,7 @@ void FiltersMenu::setupList() {
 	_setup = prepareButton(
 		_container,
 		-1,
-		tr::lng_filters_setup(tr::now),
+		{ TextWithEntities{ tr::lng_filters_setup(tr::now) } },
 		Ui::FilterIcon::Edit);
 	_reorder = std::make_unique<Ui::VerticalLayoutReorder>(_list, &_scroll);
 
@@ -246,13 +249,27 @@ base::unique_qptr<Ui::SideBarButton> FiltersMenu::prepareAll() {
 base::unique_qptr<Ui::SideBarButton> FiltersMenu::prepareButton(
 		not_null<Ui::VerticalLayout*> container,
 		FilterId id,
-		const QString &title,
+		Data::ChatFilterTitle title,
 		Ui::FilterIcon icon,
 		bool toBeginning) {
+	const auto isStatic = title.isStatic;
+	const auto makeContext = [=](Fn<void()> update) {
+		return Core::MarkedTextContext{
+			.session = &_session->session(),
+			.customEmojiRepaint = std::move(update),
+			.customEmojiLoopLimit = isStatic ? -1 : 0,
+		};
+	};
+	const auto paused = [=] {
+		return On(PowerSaving::kEmojiChat)
+			|| _session->isGifPausedAtLeastFor(Window::GifPauseReason::Any);
+	};
 	auto prepared = object_ptr<Ui::SideBarButton>(
 		container,
-		id ? title : tr::lng_filters_all(tr::now),
-		st::windowFiltersButton);
+		id ? title.text : TextWithEntities{ tr::lng_filters_all(tr::now) },
+		st::windowFiltersButton,
+		makeContext,
+		paused);
 	auto added = toBeginning
 		? container->insert(0, std::move(prepared))
 		: container->add(std::move(prepared));
@@ -269,12 +286,20 @@ base::unique_qptr<Ui::SideBarButton> FiltersMenu::prepareButton(
 		) | rpl::start_with_next([=](
 				const Dialogs::UnreadState &state,
 				bool includeMuted) {
-			const auto muted = (state.chatsMuted + state.marksMuted);
-			const auto count = (state.chats + state.marks)
+			const auto chats = state.chatsTopic
+				? (state.chats - state.chatsTopic + state.forums)
+				: state.chats;
+			const auto chatsMuted = state.chatsTopicMuted
+				? (state.chatsMuted
+					- state.chatsTopicMuted
+					+ state.forumsMuted)
+				: state.chatsMuted;
+			const auto muted = (chatsMuted + state.marksMuted);
+			const auto count = (chats + state.marks)
 				- (includeMuted ? 0 : muted);
 			const auto string = !count
 				? QString()
-				: (count > 99)
+				: (count > 999)
 				? "99+"
 				: QString::number(count);
 			raw->setBadge(string, includeMuted && (count == muted));
@@ -356,18 +381,11 @@ void FiltersMenu::showMenu(QPoint position, FilterId id) {
 	_popupMenu = base::make_unique_q<Ui::PopupMenu>(
 		i->second.get(),
 		st::popupMenuWithIcons);
-	const auto addAction = Window::PeerMenuCallback([&](
-			Window::PeerMenuCallback::Args args) {
-		return _popupMenu->addAction(
-			args.text,
-			crl::guard(&_outer, std::move(args.handler)),
-			args.icon);
-	});
-
+	const auto addAction = Ui::Menu::CreateAddActionCallback(_popupMenu);
 	if (id) {
 		addAction(
 			tr::lng_filters_context_edit(tr::now),
-			[=] { EditExistingFilter(_session, id); },
+			crl::guard(&_outer, [=] { EditExistingFilter(_session, id); }),
 			&st::menuIconEdit);
 
 		auto filteredChats = [=] {
@@ -378,10 +396,14 @@ void FiltersMenu::showMenu(QPoint position, FilterId id) {
 			std::move(filteredChats),
 			addAction);
 
-		addAction(
-			tr::lng_filters_context_remove(tr::now),
-			[=] { _removeApi.request(Ui::MakeWeak(&_outer), _session, id); },
-			&st::menuIconDelete);
+		addAction({
+			.text = tr::lng_filters_context_remove(tr::now),
+			.handler = crl::guard(&_outer, [=, this] {
+				_removeApi.request(Ui::MakeWeak(&_outer), _session, id);
+			}),
+			.icon = &st::menuIconDeleteAttention,
+			.isAttention = true,
+		});
 	} else {
 		auto customUnreadState = [=] {
 			const auto session = &_session->session();
@@ -397,7 +419,7 @@ void FiltersMenu::showMenu(QPoint position, FilterId id) {
 
 		addAction(
 			tr::lng_filters_setup_menu(tr::now),
-			[=] { openFiltersSettings(); },
+			crl::guard(&_outer, [=] { openFiltersSettings(); }),
 			&st::menuIconEdit);
 	}
 	if (_popupMenu->empty()) {

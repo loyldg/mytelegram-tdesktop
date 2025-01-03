@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include "core/stars_amount.h"
 #include "data/data_birthday.h"
 #include "data/data_peer.h"
 #include "data/data_chat_participant_status.h"
@@ -18,6 +19,32 @@ namespace Data {
 struct BotCommand;
 struct BusinessDetails;
 } // namespace Data
+
+struct StarRefProgram {
+	StarsAmount revenuePerUser;
+	TimeId endDate = 0;
+	ushort commission = 0;
+	uint8 durationMonths = 0;
+
+	friend inline constexpr bool operator==(
+		StarRefProgram,
+		StarRefProgram) = default;
+};
+
+struct BotVerifierSettings {
+	DocumentId iconId = 0;
+	QString company;
+	QString customDescription;
+	bool canModifyDescription = false;
+
+	explicit operator bool() const {
+		return iconId != 0;
+	}
+
+	friend inline bool operator==(
+		const BotVerifierSettings &a,
+		const BotVerifierSettings &b) = default;
+};
 
 struct BotInfo {
 	BotInfo();
@@ -33,11 +60,19 @@ struct BotInfo {
 	QString botMenuButtonUrl;
 	QString privacyPolicyUrl;
 
+	QColor botAppColorTitleDay = QColor(0, 0, 0, 0);
+	QColor botAppColorTitleNight = QColor(0, 0, 0, 0);
+	QColor botAppColorBodyDay = QColor(0, 0, 0, 0);
+	QColor botAppColorBodyNight = QColor(0, 0, 0, 0);
+
 	QString startToken;
 	Dialogs::EntryState inlineReturnTo;
 
 	ChatAdminRights groupAdminRights;
 	ChatAdminRights channelAdminRights;
+
+	StarRefProgram starRefProgram;
+	std::unique_ptr<BotVerifierSettings> verifierSettings;
 
 	int version = 0;
 	int descriptionVersion = 0;
@@ -47,6 +82,7 @@ struct BotInfo {
 	bool cantJoinGroups : 1 = false;
 	bool supportsAttachMenu : 1 = false;
 	bool canEditInformation : 1 = false;
+	bool canManageEmojiStatus : 1 = false;
 	bool supportsBusiness : 1 = false;
 	bool hasMainApp : 1 = false;
 };
@@ -157,6 +193,12 @@ public:
 	[[nodiscard]] const std::vector<QString> &usernames() const;
 	[[nodiscard]] bool isUsernameEditable(QString username) const;
 
+	void setBotVerifyDetails(Ui::BotVerifyDetails details);
+	void setBotVerifyDetailsIcon(DocumentId iconId);
+	[[nodiscard]] Ui::BotVerifyDetails *botVerifyDetails() const {
+		return _botVerifyDetails.get();
+	}
+
 	enum class ContactStatus : char {
 		Unknown,
 		Contact,
@@ -200,6 +242,8 @@ public:
 	[[nodiscard]] const Data::BusinessDetails &businessDetails() const;
 	void setBusinessDetails(Data::BusinessDetails details);
 
+	void setStarRefProgram(StarRefProgram program);
+
 	[[nodiscard]] ChannelId personalChannelId() const;
 	[[nodiscard]] MsgId personalChannelMessageId() const;
 	void setPersonalChannel(ChannelId channelId, MsgId messageId);
@@ -233,6 +277,7 @@ private:
 	std::vector<Data::UnavailableReason> _unavailableReasons;
 	QString _phone;
 	QString _privateForwardName;
+	std::unique_ptr<Ui::BotVerifyDetails> _botVerifyDetails;
 
 	ChannelId _personalChannelId = 0;
 	MsgId _personalChannelMessageId = 0;
@@ -246,5 +291,11 @@ private:
 namespace Data {
 
 void ApplyUserUpdate(not_null<UserData*> user, const MTPDuserFull &update);
+
+[[nodiscard]] StarRefProgram ParseStarRefProgram(
+	const MTPStarRefProgram *program);
+
+[[nodiscard]] Ui::BotVerifyDetails ParseBotVerifyDetails(
+	const MTPBotVerification *info);
 
 } // namespace Data

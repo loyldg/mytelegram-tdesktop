@@ -27,9 +27,13 @@ public:
 		not_null<Ui::RpWidget*> parent,
 		const style::SettingsSlider &st);
 
-	[[nodiscard]] int centerOfSection(int section) const;
-	void fitWidthToSections();
-	void setUnreadCount(int index, int unreadCount);
+	bool setSectionsAndCheckChanged(
+		std::vector<TextWithEntities> &&sections,
+		const std::any &context,
+		Fn<bool()> paused);
+
+	void fitWidthToSections() override;
+	void setUnreadCount(int index, int unreadCount, bool muted);
 	void setLockedFrom(int index);
 
 	[[nodiscard]] rpl::producer<int> contextMenuRequested() const;
@@ -62,7 +66,7 @@ protected:
 	std::vector<ShiftedSection> _sections;
 
 private:
-	[[nodiscard]] QImage cacheUnreadCount(int count) const;
+	[[nodiscard]] QImage cacheUnreadCount(int count, bool muted) const;
 	[[nodiscard]] int calculateLockedFromX() const;
 
 	using Index = int;
@@ -83,6 +87,7 @@ private:
 	std::optional<Ui::RoundRect> _bar;
 	std::optional<Ui::RoundRect> _barActive;
 	std::optional<QImage> _lockCache;
+	Fn<bool()> _emojiPaused;
 
 	int _reordering = 0;
 

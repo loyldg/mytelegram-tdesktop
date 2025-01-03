@@ -11,6 +11,23 @@ using "ui/widgets/widgets.style";
 using "ui/effects/premium.style";
 using "settings/settings.style";
 
+creditsSettingsBigBalance: FlatLabel(defaultFlatLabel) {
+	style: TextStyle(defaultTextStyle) {
+		font: font(24px semibold);
+	}
+}
+creditsSettingsBigBalanceSkip: 4px;
+creditsSettingsBigBalanceButton: RoundButton(defaultActiveButton) {
+	height: 42px;
+	textTop: 12px;
+	style: semiboldTextStyle;
+}
+creditsSettingsBigBalanceButtonGift: RoundButton(defaultLightButton) {
+	height: 42px;
+	textTop: 12px;
+	style: defaultTextStyle;
+}
+
 creditsPremiumCover: PremiumCover(defaultPremiumCover) {
 	about: FlatLabel(userPremiumCoverAbout) {
 		textFg: boxTitleFg;
@@ -20,7 +37,7 @@ creditsLowBalancePremiumCover: PremiumCover(creditsPremiumCover) {
 	starSize: size(64px, 62px);
 	starTopSkip: 30px;
 }
-creditsLowBalancePremiumCoverHeight: 180px;
+creditsLowBalancePremiumCoverHeight: 162px;
 creditsTopupButton: SettingsButton(settingsButton) {
 	style: semiboldTextStyle;
 }
@@ -103,7 +120,8 @@ giftBoxButtonBottom: 12px;
 giftBoxButtonPadding: margins(8px, 4px, 8px, 4px);
 giftBoxPreviewStickerPadding: margins(10px, 12px, 10px, 16px);
 giftBoxPreviewTitlePadding: margins(12px, 4px, 12px, 4px);
-giftBoxPreviewTextPadding: margins(12px, 4px, 12px, 24px);
+giftBoxPreviewTextPadding: margins(12px, 4px, 12px, 4px);
+giftBoxButtonMargin: margins(12px, 8px, 12px, 12px);
 giftBoxStickerTop: 0px;
 giftBoxStickerStarTop: 24px;
 giftBoxStickerSize: size(80px, 80px);
@@ -139,3 +157,42 @@ giftListAbout: FlatLabel(defaultFlatLabel) {
 giftListAboutMargin: margins(12px, 24px, 12px, 24px);
 giftBoxEmojiToggleTop: 7px;
 giftBoxLimitTop: 28px;
+
+creditsHistoryEntriesList: PeerList(defaultPeerList) {
+	padding: margins(
+		0px,
+		7px,
+		0px,
+		7px);
+	item: PeerListItem(defaultPeerListItem) {
+		height: 66px;
+		photoPosition: point(18px, 6px);
+		namePosition: point(70px, 6px);
+		statusPosition: point(70px, 43px);
+		photoSize: 42px;
+	}
+}
+
+subscriptionCreditsBadgePadding: margins(10px, 1px, 8px, 3px);
+
+uniqueGiftModelTop: 20px;
+uniqueGiftTitle: FlatLabel(boxTitle) {
+	align: align(top);
+}
+uniqueGiftTitleTop: 140px;
+uniqueGiftSubtitle: FlatLabel(defaultFlatLabel) {
+	minWidth: 256px;
+	align: align(top);
+}
+uniqueGiftSubtitleTop: 170px;
+uniqueGiftBottom: 20px;
+uniqueCloseButton: IconButton(boxTitleClose) {
+	icon: icon {{ "box_button_close", videoPlayIconFg }};
+	iconOver: icon {{ "box_button_close", videoPlayIconFg }};
+	ripple: RippleAnimation(defaultRippleAnimation) {
+		color: shadowFg;
+	}
+}
+upgradeGiftBox: Box(giftBox) {
+	buttonPadding: margins(22px, 3px, 22px, 22px);
+}

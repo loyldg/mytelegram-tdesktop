@@ -618,7 +618,10 @@ void Filler::addStoryArchive() {
 void Filler::addToggleFolder() {
 	const auto controller = _controller;
 	const auto history = _request.key.history();
-	if (_topic || !history || !history->owner().chatsFilters().has()) {
+	if (_topic
+		|| !history
+		|| !history->owner().chatsFilters().has()
+		|| !history->inChatList()) {
 		return;
 	}
 	_addAction(PeerMenuCallback::Args{
@@ -1452,6 +1455,7 @@ void Filler::fillProfileActions() {
 	addToggleTopicClosed();
 	addViewDiscussion();
 	addExportChat();
+	addToggleFolder();
 	addBlockUser();
 	addReport();
 	addLeaveChat();
@@ -1881,13 +1885,88 @@ void BlockSenderFromRepliesBox(
 		Window::ClearReply{ id });
 }
 
-QPointer<Ui::BoxContent> ShowChooseRecipientBox(
-		not_null<Window::SessionNavigation*> navigation,
+object_ptr<Ui::BoxContent> PrepareChooseRecipientBox(
+		not_null<Main::Session*> session,
 		FnMut<bool(not_null<Data::Thread*>)> &&chosen,
 		rpl::producer<QString> titleOverride,
 		FnMut<void()> &&successCallback,
-		InlineBots::PeerTypes typesRestriction) {
-	const auto weak = std::make_shared<QPointer<Ui::BoxContent>>();
+		InlineBots::PeerTypes typesRestriction,
+		Fn<void(std::vector<not_null<Data::Thread*>>)> sendMany) {
+	const auto weak = std::make_shared<QPointer<PeerListBox>>();
+	const auto selectable = (sendMany != nullptr);
+	class Controller final : public ChooseRecipientBoxController {
+	public:
+		using Chosen = not_null<Data::Thread*>;
+
+		Controller(
+			not_null<Main::Session*> session,
+			FnMut<void(Chosen)> callback,
+			Fn<bool(Chosen)> filter,
+			bool selectable)
+		: ChooseRecipientBoxController({
+			.session = session,
+			.callback = std::move(callback),
+			.filter = filter,
+			.premiumRequiredError = WritePremiumRequiredError,
+		})
+		, _selectable(selectable) {
+		}
+
+		using PeerListController::setSearchNoResultsText;
+
+		void rowClicked(not_null<PeerListRow*> row) override final {
+			if (!_selectable) {
+				return ChooseRecipientBoxController::rowClicked(row);
+			}
+			const auto count = delegate()->peerListSelectedRowsCount();
+			if (showLockedError(row) || (count && row->peer()->isForum())) {
+				return;
+			} else if (row->peer()->isForum()) {
+				ChooseRecipientBoxController::rowClicked(row);
+			} else {
+				delegate()->peerListSetRowChecked(row, !row->checked());
+				_hasSelectedChanges.fire(
+					delegate()->peerListSelectedRowsCount() > 0);
+			}
+		}
+
+		base::unique_qptr<Ui::PopupMenu> rowContextMenu(
+				QWidget *parent,
+				not_null<PeerListRow*> row) override final {
+			if (!_selectable) {
+				return ChooseRecipientBoxController::rowContextMenu(
+					parent,
+					row);
+			}
+			if (!row->checked() && !row->peer()->isForum()) {
+				auto menu = base::make_unique_q<Ui::PopupMenu>(
+					parent,
+					st::popupMenuWithIcons);
+				menu->addAction(tr::lng_bot_choose_chat(tr::now), [=] {
+					delegate()->peerListSetRowChecked(row, true);
+					_hasSelectedChanges.fire(
+						delegate()->peerListSelectedRowsCount() > 0);
+				}, &st::menuIconSelect);
+				return menu;
+			}
+			return nullptr;
+		}
+
+		[[nodiscard]] rpl::producer<bool> hasSelectedChanges() const {
+			return _hasSelectedChanges.events_starting_with(false);
+		}
+
+		[[nodiscard]] rpl::producer<Chosen> singleChosen() const {
+			return _singleChosen.events();
+		}
+
+	private:
+		rpl::event_stream<Chosen> _singleChosen;
+		rpl::event_stream<bool> _hasSelectedChanges;
+		bool _selectable = false;
+
+	};
+
 	auto callback = [
 		chosen = std::move(chosen),
 		success = std::move(successCallback),
@@ -1919,23 +1998,55 @@ QPointer<Ui::BoxContent> ShowChooseRecipientBox(
 			}
 		}
 		: Fn<bool(not_null<Data::Thread*>)>();
+	auto controller = std::make_unique<Controller>(
+		session,
+		std::move(callback),
+		std::move(filter),
+		selectable);
+	const auto raw = controller.get();
 	auto initBox = [=](not_null<PeerListBox*> box) {
-		box->addButton(tr::lng_cancel(), [box] {
-			box->closeBox();
-		});
+		raw->hasSelectedChanges(
+		) | rpl::start_with_next([=](bool shown) {
+			box->clearButtons();
+			if (shown) {
+				box->addButton(tr::lng_send_button(), [=] {
+					const auto peers = box->collectSelectedRows();
+					sendMany(ranges::views::all(
+						peers
+					) | ranges::views::transform([&](
+						not_null<PeerData*> peer) -> Controller::Chosen {
+						return peer->owner().history(peer);
+					}) | ranges::to_vector);
+				});
+			}
+			box->addButton(tr::lng_cancel(), [=] {
+				box->closeBox();
+			});
+		}, box->lifetime());
 		if (titleOverride) {
 			box->setTitle(std::move(titleOverride));
 		}
 	};
-	*weak = navigation->parentController()->show(Box<PeerListBox>(
-		std::make_unique<ChooseRecipientBoxController>(ChooseRecipientArgs{
-			.session = &navigation->session(),
-			.callback = std::move(callback),
-			.filter = std::move(filter),
-			.premiumRequiredError = WritePremiumRequiredError,
-		}),
-		std::move(initBox)));
-	return weak->data();
+	auto result = Box<PeerListBox>(
+		std::move(controller),
+		std::move(initBox));
+	*weak = result.data();
+
+	return result;
+}
+
+QPointer<Ui::BoxContent> ShowChooseRecipientBox(
+		not_null<Window::SessionNavigation*> navigation,
+		FnMut<bool(not_null<Data::Thread*>)> &&chosen,
+		rpl::producer<QString> titleOverride,
+		FnMut<void()> &&successCallback,
+		InlineBots::PeerTypes typesRestriction) {
+	return navigation->parentController()->show(PrepareChooseRecipientBox(
+		&navigation->session(),
+		std::move(chosen),
+		std::move(titleOverride),
+		std::move(successCallback),
+		typesRestriction));
 }
 
 QPointer<Ui::BoxContent> ShowForwardMessagesBox(
@@ -1954,7 +2065,17 @@ QPointer<Ui::BoxContent> ShowForwardMessagesBox(
 
 	class ListBox final : public PeerListBox {
 	public:
-		using PeerListBox::PeerListBox;
+		ListBox(
+			QWidget *parent,
+			std::unique_ptr<PeerListController> controller,
+			Fn<void(not_null<ListBox*>)> init)
+		: PeerListBox(
+			parent,
+			std::move(controller),
+			[=](not_null<PeerListBox*> box) {
+				init(static_cast<ListBox*>(box.get()));
+			}) {
+		}
 
 		void setBottomSkip(int bottomSkip) {
 			PeerListBox::setInnerBottomSkip(bottomSkip);
@@ -1979,9 +2100,21 @@ QPointer<Ui::BoxContent> ShowForwardMessagesBox(
 			_forwardOptions = forwardOptions;
 		}
 
+		not_null<PeerListContent*> peerListContent() const {
+			return PeerListBox::content();
+		}
+
+		void setFilterId(FilterId filterId) {
+			_filterId = filterId;
+		}
+		[[nodiscard]] FilterId filterId() const {
+			return _filterId;
+		}
+
 	private:
 		rpl::event_stream<> _focusRequests;
 		Ui::ForwardOptions _forwardOptions;
+		FilterId _filterId = 0;
 
 	};
 
@@ -1999,6 +2132,14 @@ QPointer<Ui::BoxContent> ShowForwardMessagesBox(
 		}) {
 		}
 
+		std::unique_ptr<PeerListRow> createRestoredRow(
+				not_null<PeerData*> peer) override final {
+			return ChooseRecipientBoxController::createRow(
+				peer->owner().history(peer));
+		}
+
+		using PeerListController::setSearchNoResultsText;
+
 		void rowClicked(not_null<PeerListRow*> row) override final {
 			const auto count = delegate()->peerListSelectedRowsCount();
 			if (showLockedError(row) || (count && row->peer()->isForum())) {
@@ -2015,13 +2156,12 @@ QPointer<Ui::BoxContent> ShowForwardMessagesBox(
 		base::unique_qptr<Ui::PopupMenu> rowContextMenu(
 				QWidget *parent,
 				not_null<PeerListRow*> row) override final {
-			const auto count = delegate()->peerListSelectedRowsCount();
-			if (!count && !row->peer()->isForum()) {
+			if (!row->checked() && !row->peer()->isForum()) {
 				auto menu = base::make_unique_q<Ui::PopupMenu>(
 					parent,
 					st::popupMenuWithIcons);
 				menu->addAction(tr::lng_bot_choose_chat(tr::now), [=] {
-					delegate()->peerListSetRowChecked(row, !row->checked());
+					delegate()->peerListSetRowChecked(row, true);
 					_hasSelectedChanges.fire(
 						delegate()->peerListSelectedRowsCount() > 0);
 				}, &st::menuIconSelect);
@@ -2030,7 +2170,7 @@ QPointer<Ui::BoxContent> ShowForwardMessagesBox(
 			return nullptr;
 		}
 
-		[[nodiscard]] rpl::producer<bool> hasSelectedChanges() const{
+		[[nodiscard]] rpl::producer<bool> hasSelectedChanges() const {
 			return _hasSelectedChanges.events_starting_with(false);
 		}
 
@@ -2049,74 +2189,75 @@ QPointer<Ui::BoxContent> ShowForwardMessagesBox(
 		not_null<Controller*> controller;
 		base::unique_qptr<Ui::PopupMenu> menu;
 	};
+
+	const auto applyFilter = [=](not_null<ListBox*> box, FilterId id) {
+		box->scrollToY(0);
+		auto &filters = session->data().chatsFilters();
+		const auto &list = filters.list();
+		if (list.size() <= 1) {
+			return;
+		}
+		if (box->filterId() == id) {
+			return;
+		}
+		box->setFilterId(id);
+
+		using SavedState = PeerListController::SavedStateBase;
+		auto state = std::make_unique<PeerListState>();
+		state->controllerState = std::make_unique<SavedState>();
+
+		const auto addList = [&](auto chats) {
+			for (const auto &row : chats->all()) {
+				if (const auto history = row->history()) {
+					state->list.push_back(history->peer);
+				}
+			}
+		};
+
+		if (!id) {
+			state->list.push_back(session->user());
+			addList(session->data().chatsList()->indexed());
+			const auto folderId = Data::Folder::kId;
+			if (const auto folder = session->data().folderLoaded(folderId)) {
+				addList(folder->chatsList()->indexed());
+			}
+			addList(session->data().contactsNoChatsList());
+		} else {
+			addList(session->data().chatsFilters().chatsList(id)->indexed());
+		}
+		box->peerListContent()->restoreState(std::move(state));
+	};
+
 	const auto state = [&] {
 		auto controller = std::make_unique<Controller>(session);
 		const auto controllerRaw = controller.get();
-		auto init = [=](not_null<PeerListBox*> box) {
-			box->setSpecialTabMode(true);
-			auto applyFilter = [=](FilterId id) {
-				box->scrollToY(0);
-				auto &filters = session->data().chatsFilters();
-				const auto &list = filters.list();
-				if (list.size() <= 1) {
-					return;
-				}
-				const auto pinned = filters.chatsList(id)->pinned()->order();
-				box->peerListSortRows([&](
-						const PeerListRow &r1,
-						const PeerListRow &r2) {
-					const auto it1 = ranges::find_if(pinned, [&](
-							const Dialogs::Key &k) {
-						return k.peer() == r1.peer();
-					});
-					const auto it2 = ranges::find_if(pinned, [&](
-							const Dialogs::Key &k) {
-						return k.peer() == r2.peer();
-					});
-					if (it1 == pinned.end() && it2 != pinned.end()) {
-						return false;
-					} else if (it2 == pinned.end() && it1 != pinned.end()) {
-						return true;
-					} else if (it1 != pinned.end() && it2 != pinned.end()) {
-						return it1 < it2;
-					}
-					const auto history1 = session->data().history(r1.peer());
-					const auto history2 = session->data().history(r2.peer());
-					const auto date1 = history1->lastMessage()
-						? history1->lastMessage()->date()
-						: TimeId(0);
-					const auto date2 = history2->lastMessage()
-						? history2->lastMessage()->date()
-						: TimeId(0);
-					return date1 > date2;
-				});
-				const auto filter = ranges::find(
-					list,
-					id,
-					&Data::ChatFilter::id);
-				if (filter == list.end()) {
-					return;
-				}
-				box->peerListPartitionRows([&](const PeerListRow &row) {
-					const auto rowPtr = const_cast<PeerListRow*>(&row);
-					if (!filter->id()) {
-						box->peerListSetRowHidden(rowPtr, false);
-					} else {
-						const auto result = filter->contains(
-							session->data().history(row.peer()));
-						box->peerListSetRowHidden(rowPtr, !result);
-					}
-					return false;
-				});
-				box->peerListRefreshRows();
-			};
+		auto init = [=](not_null<ListBox*> box) {
+			controllerRaw->setSearchNoResultsText(
+				tr::lng_bot_chats_not_found(tr::now));
+			const auto lastFilterId = box->lifetime().make_state<FilterId>(0);
 			const auto chatsFilters = Ui::AddChatFiltersTabsStrip(
 				box,
 				session,
-				std::move(applyFilter));
+				[=](FilterId id) {
+					*lastFilterId = id;
+					applyFilter(box, id);
+				},
+				Window::GifPauseReason::Layer);
 			chatsFilters->lower();
-			chatsFilters->heightValue() | rpl::start_with_next([box](int h) {
-				box->setAddedTopScrollSkip(h);
+			rpl::combine(
+				chatsFilters->heightValue(),
+				rpl::producer<bool>([=](auto consumer) {
+					auto lifetime = rpl::lifetime();
+					consumer.put_next(false);
+					box->appendQueryChangedCallback([=](const QString &q) {
+						const auto hasQuery = !q.isEmpty();
+						applyFilter(box, hasQuery ? 0 : (*lastFilterId));
+						consumer.put_next_copy(hasQuery);
+					});
+					return lifetime;
+				})
+			) | rpl::start_with_next([box](int h, bool hasQuery) {
+				box->setAddedTopScrollSkip(hasQuery ? 0 : h);
 			}, box->lifetime());
 			box->multiSelectHeightValue() | rpl::start_with_next([=](int h) {
 				chatsFilters->moveToLeft(0, h);
@@ -2643,10 +2784,10 @@ void UnpinAllMessages(
 }
 
 void MenuAddMarkAsReadAllChatsAction(
-		not_null<Window::SessionController*> controller,
+		not_null<Main::Session*> session,
+		std::shared_ptr<Ui::Show> show,
 		const PeerMenuCallback &addAction) {
-	// There is no async to make weak from controller.
-	auto callback = [=, owner = &controller->session().data()] {
+	auto callback = [=, owner = &session->data()] {
 		auto boxCallback = [=](Fn<void()> &&close) {
 			close();
 
@@ -2655,10 +2796,37 @@ void MenuAddMarkAsReadAllChatsAction(
 				MarkAsReadChatList(folder->chatsList());
 			}
 		};
-		controller->show(
-			Ui::MakeConfirmBox({
-				tr::lng_context_mark_read_all_sure(),
-				std::move(boxCallback)
+		show->show(
+			Box([=](not_null<Ui::GenericBox*> box) {
+				Ui::AddSkip(box->verticalLayout());
+				Ui::AddSkip(box->verticalLayout());
+				const auto userpic = Ui::CreateChild<Ui::UserpicButton>(
+					box->verticalLayout(),
+					session->user(),
+					st::mainMenuUserpic);
+				Ui::IconWithTitle(
+					box->verticalLayout(),
+					userpic,
+					Ui::CreateChild<Ui::FlatLabel>(
+						box->verticalLayout(),
+						Info::Profile::NameValue(session->user()),
+						box->getDelegate()->style().title));
+				auto text = rpl::combine(
+					tr::lng_context_mark_read_all_sure(),
+					tr::lng_context_mark_read_all_sure_2(
+						Ui::Text::RichLangValue)
+				) | rpl::map([](QString t1, TextWithEntities t2) {
+					return TextWithEntities()
+						.append(std::move(t1))
+						.append('\n')
+						.append('\n')
+						.append(std::move(t2));
+				});
+				Ui::ConfirmBox(box, {
+					.text = std::move(text),
+					.confirmed = std::move(boxCallback),
+					.confirmStyle = &st::attentionBoxButton,
+				});
 			}),
 			Ui::LayerOption::CloseOther);
 	};
@@ -2763,9 +2931,6 @@ bool FillVideoChatMenu(
 	const auto livestream = !peer->isMegagroup() && peer->isChannel();
 	const auto has = (peer->groupCall() != nullptr);
 	const auto manager = peer->canManageGroupCall();
-	const auto creator = peer->isChat()
-		? peer->asChat()->amCreator()
-		: peer->asChannel()->amCreator();
 	if (has) {
 		addAction(
 			tr::lng_menu_start_group_call_join(tr::now),
@@ -2777,9 +2942,9 @@ bool FillVideoChatMenu(
 				? tr::lng_menu_start_group_call_channel
 				: tr::lng_menu_start_group_call)(tr::now),
 			[=] { callback({}); },
-			creator ? &st::menuIconStartStream : &st::menuIconVideoChat);
+			&st::menuIconStartStream);
 	}
-	if (!has && creator) {
+	if (!has && manager) {
 		addAction(
 			(livestream
 				? tr::lng_menu_start_group_call_scheduled_channel
