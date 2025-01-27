@@ -82,8 +82,12 @@ auto GenerateChatIntro(
 	Element *replacing,
 	const Data::ChatIntro &data,
 	Fn<void(not_null<DocumentData*>)> helloChosen)
--> Fn<void(Fn<void(std::unique_ptr<MediaGenericPart>)>)> {
-	return [=](Fn<void(std::unique_ptr<MediaGenericPart>)> push) {
+-> Fn<void(
+		not_null<MediaGeneric*>,
+		Fn<void(std::unique_ptr<MediaGenericPart>)>)> {
+	return [=](
+			not_null<MediaGeneric*> media,
+			Fn<void(std::unique_ptr<MediaGenericPart>)> push) {
 		auto pushText = [&](
 				TextWithEntities text,
 				QMargins margins = {},
@@ -94,6 +98,7 @@ auto GenerateChatIntro(
 			push(std::make_unique<MediaGenericTextPart>(
 				std::move(text),
 				margins,
+				st::defaultTextStyle,
 				links));
 		};
 		const auto title = data.customPhrases()

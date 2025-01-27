@@ -13,8 +13,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "apiwrap.h"
 #include "mainwidget.h"
 #include "api/api_bot.h"
+#include "api/api_premium.h"
 #include "api/api_text_entities.h"
 #include "api/api_user_names.h"
+#include "chat_helpers/stickers_lottie.h"
 #include "core/application.h"
 #include "core/core_settings.h"
 #include "core/mime_type.h" // Core::IsMimeSticker
@@ -569,6 +571,8 @@ not_null<UserData*> Session::processUser(const MTPUser &data) {
 				| (data.is_stories_hidden() ? Flag::StoriesHidden : Flag())
 				: Flag());
 		result->setFlags((result->flags() & ~flagsMask) | flagsSet);
+		result->setBotVerifyDetailsIcon(
+			data.vbot_verification_icon().value_or_empty());
 		if (minimal) {
 			if (result->input.type() == mtpc_inputPeerEmpty) {
 				result->input = MTP_inputPeerUser(
@@ -691,7 +695,7 @@ not_null<UserData*> Session::processUser(const MTPUser &data) {
 		if (const auto &status = data.vemoji_status()) {
 			result->setEmojiStatus(*status);
 		} else {
-			result->setEmojiStatus(0);
+			result->setEmojiStatus(EmojiStatusId());
 		}
 		if (!minimal) {
 			if (const auto botInfoVersion = data.vbot_info_version()) {
@@ -882,7 +886,7 @@ not_null<PeerData*> Session::processChat(const MTPChat &data) {
 		if (const auto &status = data.vemoji_status()) {
 			channel->setEmojiStatus(*status);
 		} else {
-			channel->setEmojiStatus(0);
+			channel->setEmojiStatus(EmojiStatusId());
 		}
 		if (minimal) {
 			if (channel->input.type() == mtpc_inputPeerEmpty
@@ -984,6 +988,8 @@ not_null<PeerData*> Session::processChat(const MTPChat &data) {
 				? Flag::StoriesHidden
 				: Flag());
 		channel->setFlags((channel->flags() & ~flagsMask) | flagsSet);
+		channel->setBotVerifyDetailsIcon(
+			data.vbot_verification_icon().value_or_empty());
 		if (!minimal && storiesState) {
 			result->setStoriesState(!storiesState->maxId
 				? UserData::StoriesState::None
@@ -2720,7 +2726,7 @@ HistoryItem *Session::addNewMessage(
 		MessageFlags localFlags,
 		NewMessageType type) {
 	const auto peerId = PeerFromMessage(data);
-	if (!peerId) {
+	if (!peerId || data.type() == mtpc_messageEmpty) {
 		return nullptr;
 	}
 
@@ -3459,6 +3465,7 @@ not_null<WebPageData*> Session::processWebpage(
 		WebPageCollage(),
 		nullptr,
 		nullptr,
+		nullptr,
 		0,
 		QString(),
 		false,
@@ -3485,6 +3492,7 @@ not_null<WebPageData*> Session::webpage(
 		WebPageCollage(),
 		nullptr,
 		nullptr,
+		nullptr,
 		0,
 		QString(),
 		false,
@@ -3504,6 +3512,7 @@ not_null<WebPageData*> Session::webpage(
 		WebPageCollage &&collage,
 		std::unique_ptr<Iv::Data> iv,
 		std::unique_ptr<WebPageStickerSet> stickerSet,
+		std::shared_ptr<UniqueGift> uniqueGift,
 		int duration,
 		const QString &author,
 		bool hasLargeMedia,
@@ -3523,6 +3532,7 @@ not_null<WebPageData*> Session::webpage(
 		std::move(collage),
 		std::move(iv),
 		std::move(stickerSet),
+		std::move(uniqueGift),
 		duration,
 		author,
 		hasLargeMedia,
@@ -3557,6 +3567,7 @@ void Session::webpageApplyFields(
 		}
 		return nullptr;
 	};
+
 	const auto lookupThemeDocument = [&]() -> DocumentData* {
 		if (const auto attributes = data.vattributes()) {
 			for (const auto &attribute : attributes->v) {
@@ -3567,6 +3578,8 @@ void Session::webpageApplyFields(
 					return (DocumentData*)nullptr;
 				}, [](const MTPDwebPageAttributeStickerSet &) {
 					return (DocumentData*)nullptr;
+				}, [](const MTPDwebPageAttributeUniqueStarGift &) {
+					return (DocumentData*)nullptr;
 				});
 				if (result) {
 					return result;
@@ -3575,6 +3588,7 @@ void Session::webpageApplyFields(
 		}
 		return nullptr;
 	};
+
 	using WebPageStickerSetPtr = std::unique_ptr<WebPageStickerSet>;
 	const auto lookupStickerSet = [&]() -> WebPageStickerSetPtr {
 		if (const auto attributes = data.vattributes()) {
@@ -3598,6 +3612,21 @@ void Session::webpageApplyFields(
 		}
 		return nullptr;
 	};
+
+	using UniqueGiftPtr = std::shared_ptr<UniqueGift>;
+	const auto lookupUniqueGift = [&]() -> UniqueGiftPtr {
+		if (const auto attributes = data.vattributes()) {
+			for (const auto &attribute : attributes->v) {
+				return attribute.match([&](
+						const MTPDwebPageAttributeUniqueStarGift &data) {
+					const auto gift = Api::FromTL(_session, data.vgift());
+					return gift ? gift->unique : nullptr;
+				}, [](const auto &) -> UniqueGiftPtr { return nullptr; });
+			}
+		}
+		return nullptr;
+	};
+
 	auto story = (Data::Story*)nullptr;
 	auto storyId = FullStoryId();
 	if (const auto attributes = data.vattributes()) {
@@ -3690,6 +3719,7 @@ void Session::webpageApplyFields(
 		WebPageCollage(this, data),
 		std::move(iv),
 		lookupStickerSet(),
+		lookupUniqueGift(),
 		data.vduration().value_or_empty(),
 		qs(data.vauthor().value_or_empty()),
 		data.is_has_large_media(),
@@ -3710,6 +3740,7 @@ void Session::webpageApplyFields(
 		WebPageCollage &&collage,
 		std::unique_ptr<Iv::Data> iv,
 		std::unique_ptr<WebPageStickerSet> stickerSet,
+		std::shared_ptr<UniqueGift> uniqueGift,
 		int duration,
 		const QString &author,
 		bool hasLargeMedia,
@@ -3728,6 +3759,7 @@ void Session::webpageApplyFields(
 		std::move(collage),
 		std::move(iv),
 		std::move(stickerSet),
+		std::move(uniqueGift),
 		duration,
 		author,
 		hasLargeMedia,
@@ -4591,7 +4623,8 @@ void Session::serviceNotification(
 			MTPint(), // stories_max_id
 			MTPPeerColor(), // color
 			MTPPeerColor(), // profile_color
-			MTPint())); // bot_active_users
+			MTPint(), // bot_active_users
+			MTPlong())); // bot_verification_icon
 	}
 	const auto history = this->history(PeerData::kServiceNotificationsId);
 	const auto insert = [=] {
@@ -4649,7 +4682,8 @@ void Session::insertCheckedServiceNotification(
 				MTPint(), // ttl_period
 				MTPint(), // quick_reply_shortcut_id
 				MTPlong(), // effect
-				MTPFactCheck()),
+				MTPFactCheck(),
+				MTPint()), // report_delivery_until_date
 			localFlags,
 			NewMessageType::Unread);
 	}

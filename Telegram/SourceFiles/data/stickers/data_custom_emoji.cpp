@@ -15,6 +15,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_session.h"
 #include "data/data_document.h"
 #include "data/data_document_media.h"
+#include "data/data_emoji_statuses.h"
 #include "data/data_file_origin.h"
 #include "data/data_forum_topic.h" // ParseTopicIconEmojiEntity.
 #include "data/data_peer.h"
@@ -27,6 +28,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ffmpeg/ffmpeg_frame_generator.h"
 #include "chat_helpers/stickers_lottie.h"
 #include "storage/file_download.h" // kMaxFileInMemory
+#include "ui/chat/chats_filter_tag.h"
+#include "ui/effects/premium_stars_colored.h"
 #include "ui/effects/credits_graphics.h"
 #include "ui/widgets/fields/input_field.h"
 #include "ui/text/custom_emoji_instance.h"
@@ -102,6 +105,22 @@ private:
 
 [[nodiscard]] QString UserpicEmojiPrefix() {
 	return u"userpic:"_q;
+}
+
+[[nodiscard]] QString ScaledSimplePrefix() {
+	return u"scaled-simple:"_q;
+}
+
+[[nodiscard]] QString ScaledCustomPrefix() {
+	return u"scaled-custom:"_q;
+}
+
+[[nodiscard]] QString ForceStaticPrefix() {
+	return u"force-static:"_q;
+}
+
+[[nodiscard]] QString CollectiblePrefix() {
+	return u"collectible:"_q;
 }
 
 [[nodiscard]] QString InternalPadding(QMargins value) {
@@ -536,12 +555,39 @@ std::unique_ptr<Ui::Text::CustomEmoji> CustomEmojiManager::create(
 		Fn<void()> update,
 		SizeTag tag,
 		int sizeOverride) {
-	if (data.startsWith(InternalPrefix())) {
+	if (data.startsWith(ScaledSimplePrefix())) {
+		const auto text = data.mid(ScaledSimplePrefix().size());
+		const auto emoji = Ui::Emoji::Find(text);
+		Assert(emoji != nullptr);
+		return Ui::MakeScaledSimpleEmoji(emoji);
+	} else if (data.startsWith(ScaledCustomPrefix())) {
+		const auto original = data.mid(ScaledCustomPrefix().size());
+		return Ui::MakeScaledCustomEmoji(
+			create(original, std::move(update), SizeTag::Large));
+	} else if (data.startsWith(ForceStaticPrefix())) {
+		const auto original = data.mid(ForceStaticPrefix().size());
+		return std::make_unique<Ui::Text::FirstFrameEmoji>(
+			create(original, std::move(update), tag, sizeOverride));
+	} else if (data.startsWith(InternalPrefix())) {
 		return internal(data);
 	} else if (data.startsWith(UserpicEmojiPrefix())) {
 		const auto ratio = style::DevicePixelRatio();
 		const auto size = EmojiSizeFromTag(tag) / ratio;
 		return userpic(data, std::move(update), size);
+	} else if (data.startsWith(CollectiblePrefix())) {
+		const auto id = data.mid(CollectiblePrefix().size()).toULongLong();
+		const auto emojiStatuses = &session().data().emojiStatuses();
+		auto info = emojiStatuses->collectibleInfo(id);
+		Assert(info != nullptr);
+		const auto documentId = info->documentId;
+		auto inner = create(documentId, base::duplicate(update), tag);
+		return Ui::Premium::MakeCollectibleEmoji(
+			data,
+			info->centerColor,
+			info->edgeColor,
+			std::move(inner),
+			std::move(update),
+			FrameSizeFromTag(tag) / style::DevicePixelRatio());
 	} else if (const auto parsed = Data::ParseTopicIconEmojiEntity(data)) {
 		return MakeTopicIconEmoji(parsed, std::move(update), tag);
 	}
@@ -1119,6 +1165,16 @@ Ui::Text::CustomEmojiFactory ReactedMenuFactory(
 		}
 		return owner->customEmojiManager().create(data, std::move(repaint));
 	};
+}
+
+QString CollectibleCustomEmojiId(Data::EmojiStatusCollectible &data) {
+	return CollectiblePrefix() + QString::number(data.id);
+}
+
+QString EmojiStatusCustomId(const EmojiStatusId &id) {
+	return id.collectible
+		? CollectibleCustomEmojiId(*id.collectible)
+		: SerializeCustomEmojiId(id.documentId);
 }
 
 } // namespace Data

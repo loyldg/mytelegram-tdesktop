@@ -22,10 +22,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_thread.h"
 #include "data/data_user.h"
 #include "history/history.h"
-#include "history/history_item_helpers.h" // GetErrorTextForSending.
+#include "history/history_item_helpers.h" // GetErrorForSending.
 #include "history/view/history_view_context_menu.h" // CopyStoryLink.
 #include "lang/lang_keys.h"
 #include "main/main_session.h"
+#include "settings/settings_credits_graphics.h"
 #include "ui/boxes/confirm_box.h"
 #include "ui/text/text_utilities.h"
 #include "styles/style_calls.h"
@@ -87,26 +88,11 @@ namespace Media::Stories {
 			return;
 		}
 		const auto peer = story->peer();
-		const auto error = [&] {
-			for (const auto thread : result) {
-				const auto error = GetErrorTextForSending(
-					thread,
-					{ .story = story, .text = &comment });
-				if (!error.isEmpty()) {
-					return std::make_pair(error, thread);
-				}
-			}
-			return std::make_pair(QString(), result.front());
-		}();
-		if (!error.first.isEmpty()) {
-			auto text = TextWithEntities();
-			if (result.size() > 1) {
-				text.append(
-					Ui::Text::Bold(error.second->chatListName())
-				).append("\n\n");
-			}
-			text.append(error.first);
-			show->showBox(Ui::MakeInformBox(text));
+		const auto error = GetErrorForSending(
+			result,
+			{ .story = story, .text = &comment });
+		if (error.error) {
+			show->showBox(MakeSendErrorBox(error, result.size() > 1));
 			return;
 		}
 
@@ -182,35 +168,15 @@ namespace Media::Stories {
 			++state->requests;
 		}
 	};
-
-	const auto viewerScheduleStyle = [&] {
-		auto date = Ui::ChooseDateTimeStyleArgs();
-		date.labelStyle = &st::groupCallBoxLabel;
-		date.dateFieldStyle = &st::groupCallScheduleDateField;
-		date.timeFieldStyle = &st::groupCallScheduleTimeField;
-		date.separatorStyle = &st::callMuteButtonLabel;
-		date.atStyle = &st::callMuteButtonLabel;
-		date.calendarStyle = &st::groupCallCalendarColors;
-
-		auto st = HistoryView::ScheduleBoxStyleArgs();
-		st.topButtonStyle = &st::groupCallMenuToggle;
-		st.popupMenuStyle = &st::groupCallPopupMenu;
-		st.chooseDateTimeArgs = std::move(date);
-		return st;
-	};
-
+	const auto st = viewerStyle
+		? ::Settings::DarkCreditsEntryBoxStyle()
+		: ::Settings::CreditsEntryBoxStyleOverrides();
 	return Box<ShareBox>(ShareBox::Descriptor{
 		.session = session,
 		.copyCallback = std::move(copyLinkCallback),
 		.submitCallback = std::move(submitCallback),
 		.filterCallback = std::move(filterCallback),
-		.stMultiSelect = viewerStyle ? &st::groupCallMultiSelect : nullptr,
-		.stComment = viewerStyle ? &st::groupCallShareBoxComment : nullptr,
-		.st = viewerStyle ? &st::groupCallShareBoxList : nullptr,
-		.stLabel = viewerStyle ? &st::groupCallField : nullptr,
-		.scheduleBoxStyle = (viewerStyle
-			? viewerScheduleStyle()
-			: HistoryView::ScheduleBoxStyleArgs()),
+		.st = st.shareBox ? *st.shareBox : ShareBoxStyleOverrides(),
 		.premiumRequiredError = SharePremiumRequiredError(),
 	});
 }
