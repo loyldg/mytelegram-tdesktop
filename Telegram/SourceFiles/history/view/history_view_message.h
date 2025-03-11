@@ -78,7 +78,7 @@ public:
 	[[nodiscard]] const HistoryMessageEdited *displayedEditBadge() const;
 	[[nodiscard]] HistoryMessageEdited *displayedEditBadge();
 
-	[[nodiscard]] bool embedReactionsInBubble() const;
+	bool embedReactionsInBubble() const override;
 
 	int marginTop() const override;
 	int marginBottom() const override;
@@ -159,10 +159,6 @@ public:
 		const base::flat_set<UserId> &changes) override;
 
 	void animateReaction(Ui::ReactionFlyAnimationArgs &&args) override;
-	auto takeReactionAnimations()
-	-> base::flat_map<
-		Data::ReactionId,
-		std::unique_ptr<Ui::ReactionFlyAnimation>> override;
 
 	void animateEffect(Ui::ReactionFlyAnimationArgs &&args) override;
 	auto takeEffectAnimation()
@@ -180,6 +176,9 @@ private:
 	struct FromNameStatus;
 	struct RightAction;
 
+	bool updateBottomInfo();
+
+	void initPaidInformation();
 	void initLogEntryOriginal();
 	void initPsa();
 	void fromNameUpdated(int width) const;
@@ -300,15 +299,13 @@ private:
 	[[nodiscard]] ClickHandlerPtr psaTooltipLink() const;
 	void psaTooltipToggled(bool shown) const;
 
-	void setReactions(std::unique_ptr<Reactions::InlineList> list);
 	void refreshRightBadge();
-	void refreshReactions();
 	void validateFromNameText(PeerData *from) const;
+	void ensureFromNameStatusLink(not_null<PeerData*> peer) const;
 
 	mutable std::unique_ptr<RightAction> _rightAction;
 	mutable ClickHandlerPtr _fastReplyLink;
 	mutable std::unique_ptr<ViewButton> _viewButton;
-	std::unique_ptr<Reactions::InlineList> _reactions;
 	std::unique_ptr<TopicButton> _topicButton;
 	mutable std::unique_ptr<CommentsButton> _comments;
 

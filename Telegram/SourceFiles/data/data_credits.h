@@ -11,6 +11,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 namespace Data {
 
+struct UniqueGift;
+
 struct CreditTopupOption final {
 	uint64 credits = 0;
 	QString product;
@@ -62,7 +64,13 @@ struct CreditsHistoryEntry final {
 	uint64 barePeerId = 0;
 	uint64 bareGiveawayMsgId = 0;
 	uint64 bareGiftStickerId = 0;
+	uint64 bareGiftOwnerId = 0;
 	uint64 bareActorId = 0;
+	uint64 bareEntryOwnerId = 0;
+	uint64 giftChannelSavedId = 0;
+	uint64 stargiftId = 0;
+	std::shared_ptr<UniqueGift> uniqueGift;
+	Fn<std::vector<CreditsHistoryEntry>()> pinnedSavedGifts;
 	StarsAmount starrefAmount;
 	int starrefCommission = 0;
 	uint64 starrefRecipientId = 0;
@@ -70,16 +78,29 @@ struct CreditsHistoryEntry final {
 	QDateTime subscriptionUntil;
 	QDateTime successDate;
 	QString successLink;
+	int paidMessagesCount = 0;
+	StarsAmount paidMessagesAmount;
+	int paidMessagesCommission = 0;
 	int limitedCount = 0;
 	int limitedLeft = 0;
 	int starsConverted = 0;
+	int starsToUpgrade = 0;
+	int starsUpgradedBySender = 0;
+	int premiumMonthsForStars = 0;
 	int floodSkip = 0;
 	bool converted : 1 = false;
 	bool anonymous : 1 = false;
 	bool stargift : 1 = false;
+	bool giftTransferred : 1 = false;
+	bool giftRefunded : 1 = false;
+	bool giftUpgraded : 1 = false;
+	bool giftPinned : 1 = false;
 	bool savedToProfile : 1 = false;
 	bool fromGiftsList : 1 = false;
+	bool fromGiftSlug : 1 = false;
 	bool soldOutInfo : 1 = false;
+	bool canUpgradeGift : 1 = false;
+	bool hasGiftComment : 1 = false;
 	bool reaction : 1 = false;
 	bool refunded : 1 = false;
 	bool pending : 1 = false;

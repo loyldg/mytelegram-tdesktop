@@ -11,10 +11,11 @@ template <typename Object>
 class object_ptr;
 
 class PeerData;
+struct ShareBoxStyleOverrides;
 
-namespace Api {
-struct UserStarGift;
-} // namespace Api
+namespace ChatHelpers {
+class Show;
+} // namespace ChatHelpers
 
 namespace Data {
 struct Boost;
@@ -22,7 +23,13 @@ struct CreditsHistoryEntry;
 struct SubscriptionEntry;
 struct GiftCode;
 struct CreditTopupOption;
+struct SavedStarGift;
+struct StarGift;
 } // namespace Data
+
+namespace HistoryView {
+struct ScheduleBoxStyleArgs;
+} // namespace HistoryView
 
 namespace Main {
 class Session;
@@ -34,6 +41,10 @@ class SessionController;
 } // namespace Window
 
 namespace style {
+struct Box;
+struct Table;
+struct FlatLabel;
+struct PopupMenu;
 struct PeerListItem;
 } // namespace style
 
@@ -41,6 +52,7 @@ namespace Ui {
 class GenericBox;
 class RpWidget;
 class VerticalLayout;
+class PopupMenu;
 } // namespace Ui
 
 namespace Settings {
@@ -79,6 +91,43 @@ void AddWithdrawalWidget(
 	bool withdrawalEnabled,
 	rpl::producer<QString> usdValue);
 
+struct GiftWearBoxStyleOverride {
+	const style::Box *box = nullptr;
+	const style::FlatLabel *title = nullptr;
+	const style::FlatLabel *subtitle = nullptr;
+	const style::icon *radiantIcon = nullptr;
+	const style::icon *proofIcon = nullptr;
+	const style::FlatLabel *infoTitle = nullptr;
+	const style::FlatLabel *infoAbout = nullptr;
+};
+[[nodiscard]] GiftWearBoxStyleOverride DarkGiftWearBoxStyle();
+
+struct CreditsEntryBoxStyleOverrides {
+	const style::Box *box = nullptr;
+	const style::PopupMenu *menu = nullptr;
+	const style::Table *table = nullptr;
+	const style::FlatLabel *tableValueMultiline = nullptr;
+	const style::FlatLabel *tableValueMessage = nullptr;
+	const style::icon *link = nullptr;
+	const style::icon *share = nullptr;
+	const style::icon *transfer = nullptr;
+	const style::icon *wear = nullptr;
+	const style::icon *takeoff = nullptr;
+	const style::icon *show = nullptr;
+	const style::icon *hide = nullptr;
+	const style::icon *pin = nullptr;
+	const style::icon *unpin = nullptr;
+	std::shared_ptr<ShareBoxStyleOverrides> shareBox;
+	std::shared_ptr<GiftWearBoxStyleOverride> giftWearBox;
+};
+[[nodiscard]] CreditsEntryBoxStyleOverrides DarkCreditsEntryBoxStyle();
+
+void GenericCreditsEntryBox(
+	not_null<Ui::GenericBox*> box,
+	std::shared_ptr<ChatHelpers::Show> show,
+	const Data::CreditsHistoryEntry &e,
+	const Data::SubscriptionEntry &s,
+	CreditsEntryBoxStyleOverrides st = {});
 void ReceiptCreditsBox(
 	not_null<Ui::GenericBox*> box,
 	not_null<Window::SessionController*> controller,
@@ -100,10 +149,31 @@ void CreditsPrizeBox(
 	not_null<Window::SessionController*> controller,
 	const Data::GiftCode &data,
 	TimeId date);
-void UserStarGiftBox(
+void GlobalStarGiftBox(
+	not_null<Ui::GenericBox*> box,
+	std::shared_ptr<ChatHelpers::Show> show,
+	const Data::StarGift &data,
+	CreditsEntryBoxStyleOverrides st = {});
+
+[[nodiscard]] Data::CreditsHistoryEntry SavedStarGiftEntry(
+	not_null<PeerData*> owner,
+	const Data::SavedStarGift &data);
+void SavedStarGiftBox(
 	not_null<Ui::GenericBox*> box,
 	not_null<Window::SessionController*> controller,
-	const Api::UserStarGift &data);
+	not_null<PeerData*> owner,
+	const Data::SavedStarGift &data);
+enum class SavedStarGiftMenuType {
+	List,
+	View,
+};
+void FillSavedStarGiftMenu(
+	std::shared_ptr<ChatHelpers::Show> show,
+	not_null<Ui::PopupMenu*> menu,
+	const Data::CreditsHistoryEntry &e,
+	SavedStarGiftMenuType type,
+	CreditsEntryBoxStyleOverrides st = {});
+
 void StarGiftViewBox(
 	not_null<Ui::GenericBox*> box,
 	not_null<Window::SessionController*> controller,
@@ -148,14 +218,18 @@ struct SmallBalanceDeepLink {
 	QString purpose;
 };
 struct SmallBalanceStarGift {
-	UserId userId = 0;
+	PeerId recipientId;
+};
+struct SmallBalanceForMessage {
+	PeerId recipientId;
 };
 struct SmallBalanceSource : std::variant<
 	SmallBalanceBot,
 	SmallBalanceReaction,
 	SmallBalanceSubscription,
 	SmallBalanceDeepLink,
-	SmallBalanceStarGift> {
+	SmallBalanceStarGift,
+	SmallBalanceForMessage> {
 	using variant::variant;
 };
 

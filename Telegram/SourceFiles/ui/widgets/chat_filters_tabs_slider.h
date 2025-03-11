@@ -27,7 +27,10 @@ public:
 		not_null<Ui::RpWidget*> parent,
 		const style::SettingsSlider &st);
 
-	bool setSectionsAndCheckChanged(std::vector<QString> &&sections);
+	bool setSectionsAndCheckChanged(
+		std::vector<TextWithEntities> &&sections,
+		const Text::MarkedContext &context,
+		Fn<bool()> paused);
 
 	void fitWidthToSections() override;
 	void setUnreadCount(int index, int unreadCount, bool muted);
@@ -69,7 +72,8 @@ private:
 	using Index = int;
 	struct Unread final {
 		QImage cache;
-		int count = 0;
+		ushort count = 0;
+		bool muted = false;
 	};
 	base::flat_map<Index, Unread> _unreadCounts;
 	const style::SettingsSlider &_st;
@@ -84,6 +88,7 @@ private:
 	std::optional<Ui::RoundRect> _bar;
 	std::optional<Ui::RoundRect> _barActive;
 	std::optional<QImage> _lockCache;
+	Fn<bool()> _emojiPaused;
 
 	int _reordering = 0;
 

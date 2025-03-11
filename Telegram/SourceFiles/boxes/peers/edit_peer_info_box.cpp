@@ -26,6 +26,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "boxes/peers/edit_peer_requests_box.h"
 #include "boxes/peers/edit_peer_reactions.h"
 #include "boxes/peers/replace_boost_box.h"
+#include "boxes/peers/verify_peers_box.h"
 #include "boxes/peer_list_controllers.h"
 #include "boxes/stickers_box.h"
 #include "boxes/username_box.h"
@@ -218,6 +219,33 @@ void SaveSlowmodeSeconds(
 	api->registerModifyRequest(key, requestId);
 }
 
+void SaveStarsPerMessage(
+		not_null<ChannelData*> channel,
+		int starsPerMessage,
+		Fn<void()> done) {
+	const auto api = &channel->session().api();
+	const auto key = Api::RequestKey("stars_per_message", channel->id);
+
+	const auto requestId = api->request(MTPchannels_UpdatePaidMessagesPrice(
+		channel->inputChannel,
+		MTP_long(starsPerMessage)
+	)).done([=](const MTPUpdates &result) {
+		api->clearModifyRequest(key);
+		api->applyUpdates(result);
+		channel->setStarsPerMessage(starsPerMessage);
+		done();
+	}).fail([=](const MTP::Error &error) {
+		api->clearModifyRequest(key);
+		if (error.type() != u"CHAT_NOT_MODIFIED"_q) {
+			return;
+		}
+		channel->setStarsPerMessage(starsPerMessage);
+		done();
+	}).send();
+
+	api->registerModifyRequest(key, requestId);
+}
+
 void SaveBoostsUnrestrict(
 		not_null<ChannelData*> channel,
 		int boostsUnrestrict,
@@ -270,6 +298,7 @@ void ShowEditPermissions(
 					channel,
 					result.boostsUnrestrict,
 					close);
+				SaveStarsPerMessage(channel, result.starsPerMessage, close);
 			}
 		};
 		auto done = [=](EditPeerPermissionsBoxResult result) {
@@ -281,7 +310,9 @@ void ShowEditPermissions(
 			const auto saveFor = peer->migrateToOrMe();
 			const auto chat = saveFor->asChat();
 			if (!chat
-				|| (!result.slowmodeSeconds && !result.boostsUnrestrict)) {
+				|| (!result.slowmodeSeconds
+					&& !result.boostsUnrestrict
+					&& !result.starsPerMessage)) {
 				save(saveFor, result);
 				return;
 			}
@@ -366,6 +397,7 @@ private:
 	void fillBotEditIntroButton();
 	void fillBotEditCommandsButton();
 	void fillBotEditSettingsButton();
+	void fillBotVerifyAccounts();
 
 	void submitTitle();
 	void submitDescription();
@@ -1206,6 +1238,7 @@ void Controller::fillManageSection() {
 					Ui::Text::RichLangValue),
 				st::boxDividerLabel),
 			st::defaultBoxDividerLabelPadding));
+		fillBotVerifyAccounts();
 		return;
 	}
 
@@ -1241,7 +1274,9 @@ void Controller::fillManageSection() {
 		? channel->canViewMembers()
 		: chat->amIn();
 	const auto canViewKicked = isChannel
-		&& (channel->isBroadcast() || channel->isGigagroup());
+		&& (channel->isMegagroup()
+			? (channel->isBroadcast() || channel->isGigagroup())
+			: true);
 	const auto hasRecentActions = isChannel
 		&& (channel->hasAdminRights() || channel->amCreator());
 	const auto hasStarRef = Info::BotStarRef::Join::Allowed(_peer)
@@ -1794,6 +1829,39 @@ void Controller::fillBotEditSettingsButton() {
 		rpl::never<QString>(),
 		[=] { toggleBotManager(user->username()); },
 		{ &st::menuIconSettings });
+}
+
+void Controller::fillBotVerifyAccounts() {
+	Expects(_isBot);
+
+	const auto user = _peer->asUser();
+	const auto wrap = _controls.buttonsLayout->add(
+		object_ptr<Ui::SlideWrap<Ui::VerticalLayout>>(
+			_controls.buttonsLayout,
+			object_ptr<Ui::VerticalLayout>(
+				_controls.buttonsLayout)));
+	wrap->toggleOn(rpl::single(
+		rpl::empty
+	) | rpl::then(user->owner().botCommandsChanges(
+	) | rpl::filter(
+		rpl::mappers::_1 == _peer
+	) | rpl::to_empty) | rpl::map([=] {
+		const auto info = user->botInfo.get();
+		return info && info->verifierSettings;
+	}));
+
+	const auto inner = wrap->entity();
+	Ui::AddSkip(inner);
+	AddButtonWithCount(
+		inner,
+		tr::lng_manage_peer_bot_verify(),
+		rpl::never<QString>(),
+		[controller = _navigation->parentController(), user] {
+			controller->show(MakeVerifyPeersBox(controller, user));
+		},
+		{ &st::menuIconFactcheck });
+	Ui::AddSkip(inner);
+	Ui::AddDivider(inner);
 }
 
 void Controller::submitTitle() {
@@ -2655,4 +2723,10 @@ bool EditPeerInfoBox::Available(not_null<PeerData*> peer) {
 	} else {
 		return false;
 	}
+}
+
+void ShowEditChatPermissions(
+		not_null<Window::SessionNavigation*> navigation,
+		not_null<PeerData*> peer) {
+	ShowEditPermissions(navigation, peer);
 }

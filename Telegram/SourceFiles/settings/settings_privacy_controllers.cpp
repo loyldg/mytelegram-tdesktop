@@ -202,7 +202,9 @@ AdminLog::OwnedItem GenerateForwardedItem(
 		MTPint(), // ttl_period
 		MTPint(), // quick_reply_shortcut_id
 		MTPlong(), // effect
-		MTPFactCheck()
+		MTPFactCheck(),
+		MTPint(), // report_delivery_until_date
+		MTPlong() // paid_message_stars
 	).match([&](const MTPDmessage &data) {
 		return history->makeMessage(
 			history->nextNonHistoryEntryId(),

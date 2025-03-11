@@ -34,6 +34,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/view/media/history_view_service_box.h"
 #include "history/view/media/history_view_story_mention.h"
 #include "history/view/media/history_view_premium_gift.h"
+#include "history/view/media/history_view_unique_gift.h"
 #include "history/view/media/history_view_userpic_suggestion.h"
 #include "dialogs/ui/dialogs_message_view.h"
 #include "ui/image/image.h"
@@ -446,16 +447,17 @@ Call ComputeCallData(const MTPDmessageActionPhoneCall &call) {
 	auto result = Call();
 	result.finishReason = [&] {
 		if (const auto reason = call.vreason()) {
-			switch (reason->type()) {
-			case mtpc_phoneCallDiscardReasonBusy:
+			return reason->match([](const MTPDphoneCallDiscardReasonBusy &) {
 				return CallFinishReason::Busy;
-			case mtpc_phoneCallDiscardReasonDisconnect:
+			}, [](const MTPDphoneCallDiscardReasonDisconnect &) {
 				return CallFinishReason::Disconnected;
-			case mtpc_phoneCallDiscardReasonHangup:
+			}, [](const MTPDphoneCallDiscardReasonHangup &) {
 				return CallFinishReason::Hangup;
-			case mtpc_phoneCallDiscardReasonMissed:
+			}, [](const MTPDphoneCallDiscardReasonMissed &) {
 				return CallFinishReason::Missed;
-			}
+			}, [](const MTPDphoneCallDiscardReasonAllowGroupCall &) {
+				return CallFinishReason::AllowGroupCall;
+			});
 			Unexpected("Call reason type.");
 		}
 		return CallFinishReason::Hangup;
@@ -549,6 +551,14 @@ not_null<HistoryItem*> Media::parent() const {
 
 DocumentData *Media::document() const {
 	return nullptr;
+}
+
+PhotoData *Media::videoCover() const {
+	return nullptr;
+}
+
+TimeId Media::videoTimestamp() const {
+	return 0;
 }
 
 bool Media::hasQualitiesList() const {
@@ -967,17 +977,16 @@ std::unique_ptr<HistoryView::Media> MediaPhoto::createView(
 MediaFile::MediaFile(
 	not_null<HistoryItem*> parent,
 	not_null<DocumentData*> document,
-	bool skipPremiumEffect,
-	bool hasQualitiesList,
-	bool spoiler,
-	crl::time ttlSeconds)
+	Args &&args)
 : Media(parent)
 , _document(document)
+, _videoCover(args.videoCover)
+, _ttlSeconds(args.ttlSeconds)
 , _emoji(document->sticker() ? document->sticker()->alt : QString())
-, _skipPremiumEffect(skipPremiumEffect)
-, _hasQualitiesList(hasQualitiesList)
-, _spoiler(spoiler)
-, _ttlSeconds(ttlSeconds) {
+, _videoTimestamp(args.videoTimestamp)
+, _skipPremiumEffect(args.skipPremiumEffect)
+, _hasQualitiesList(args.hasQualitiesList)
+, _spoiler(args.spoiler) {
 	parent->history()->owner().registerDocumentItem(_document, parent);
 
 	if (!_emoji.isEmpty()) {
@@ -1001,17 +1010,26 @@ MediaFile::~MediaFile() {
 }
 
 std::unique_ptr<Media> MediaFile::clone(not_null<HistoryItem*> parent) {
-	return std::make_unique<MediaFile>(
-		parent,
-		_document,
-		!_document->session().premium(),
-		_hasQualitiesList,
-		_spoiler,
-		_ttlSeconds);
+	return std::make_unique<MediaFile>(parent, _document, MediaFile::Args{
+		.ttlSeconds = _ttlSeconds,
+		.videoCover = _videoCover,
+		.videoTimestamp = _videoTimestamp,
+		.hasQualitiesList = _hasQualitiesList,
+		.skipPremiumEffect = !_document->session().premium(),
+		.spoiler = _spoiler,
+	});
 }
 
 DocumentData *MediaFile::document() const {
 	return _document;
+}
+
+PhotoData *MediaFile::videoCover() const {
+	return _videoCover;
+}
+
+TimeId MediaFile::videoTimestamp() const {
+	return _videoTimestamp;
 }
 
 bool MediaFile::hasQualitiesList() const {
@@ -1284,7 +1302,11 @@ bool MediaFile::updateSentMedia(const MTPMessageMedia &media) {
 			"or with ttl_seconds in updateSentMedia()"));
 		return false;
 	}
-	parent()->history()->owner().documentConvert(_document, *content);
+	const auto owner = &parent()->history()->owner();
+	owner->documentConvert(_document, *content);
+	if (const auto cover = _videoCover ? data.vvideo_cover() : nullptr) {
+		owner->photoConvert(_videoCover, *cover);
+	}
 	return true;
 }
 
@@ -2374,6 +2396,16 @@ std::unique_ptr<HistoryView::Media> MediaGiftBox::createView(
 		not_null<HistoryView::Element*> message,
 		not_null<HistoryItem*> realParent,
 		HistoryView::Element *replacing) {
+	if (const auto &unique = _data.unique) {
+		return std::make_unique<HistoryView::MediaGeneric>(
+			message,
+			HistoryView::GenerateUniqueGiftMedia(message, replacing, unique),
+			HistoryView::MediaGenericDescriptor{
+				.maxWidth = st::msgServiceGiftBoxSize.width(),
+				.paintBg = HistoryView::UniqueGiftBg(message, unique),
+				.service = true,
+			});
+	}
 	return std::make_unique<HistoryView::ServiceBox>(
 		message,
 		std::make_unique<HistoryView::PremiumGift>(message, this));
