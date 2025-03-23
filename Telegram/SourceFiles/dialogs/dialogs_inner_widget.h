@@ -11,6 +11,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/object_ptr.h"
 #include "base/timer.h"
 #include "dialogs/dialogs_key.h"
+#include "dialogs/ui/dialogs_quick_action_context.h"
 #include "data/data_messages.h"
 #include "ui/dragging_scroll_manager.h"
 #include "ui/effects/animations.h"
@@ -25,6 +26,10 @@ namespace MTP {
 class Error;
 } // namespace MTP
 
+namespace Lottie {
+class Icon;
+} // namespace Lottie
+
 namespace Main {
 class Session;
 } // namespace Main
@@ -34,6 +39,9 @@ class IconButton;
 class PopupMenu;
 class FlatLabel;
 struct ScrollToRequest;
+namespace Controls {
+enum class QuickDialogAction;
+} // namespace Controls
 } // namespace Ui
 
 namespace Window {
@@ -65,6 +73,7 @@ class SearchEmpty;
 class ChatSearchIn;
 enum class HashOrCashtag : uchar;
 struct RightButton;
+enum class ChatTypeFilter : uchar;
 
 struct ChosenRow {
 	Key key;
@@ -140,6 +149,8 @@ public:
 	void refreshEmpty();
 	void resizeEmpty();
 
+	void showPeerMenu();
+
 	[[nodiscard]] bool isUserpicPress() const;
 	[[nodiscard]] bool isUserpicPressOnWide() const;
 	void cancelChatPreview();
@@ -176,6 +187,8 @@ public:
 	[[nodiscard]] rpl::producer<> listBottomReached() const;
 	[[nodiscard]] auto changeSearchTabRequests() const
 		-> rpl::producer<ChatSearchTab>;
+	[[nodiscard]] auto changeSearchFilterRequests() const
+		-> rpl::producer<ChatTypeFilter>;
 	[[nodiscard]] rpl::producer<> cancelSearchRequests() const;
 	[[nodiscard]] rpl::producer<> cancelSearchFromRequests() const;
 	[[nodiscard]] rpl::producer<> changeSearchFromRequests() const;
@@ -203,6 +216,12 @@ public:
 
 	[[nodiscard]] rpl::producer<UserId> openBotMainAppRequests() const;
 
+	void setSwipeContextData(
+		int64 key,
+		std::optional<Ui::Controls::SwipeContextData> data);
+	[[nodiscard]] int64 calcSwipeKey(int top);
+	void prepareQuickAction(int64 key, Dialogs::Ui::QuickDialogAction);
+
 protected:
 	void visibleTopBottomUpdated(
 		int visibleTop,
@@ -221,6 +240,7 @@ private:
 	struct CollapsedRow;
 	struct HashtagResult;
 	struct PeerSearchResult;
+	struct TagCache;
 
 	enum class JumpSkip {
 		PreviousOrBegin,
@@ -307,7 +327,8 @@ private:
 			|| (_peerSearchPressed >= 0)
 			|| (_previewPressed >= 0)
 			|| (_searchedPressed >= 0)
-			|| _pressedMorePosts;
+			|| _pressedMorePosts
+			|| _pressedChatTypeFilter;
 	}
 	bool isSelected() const {
 		return (_collapsedSelected >= 0)
@@ -317,7 +338,8 @@ private:
 			|| (_peerSearchSelected >= 0)
 			|| (_previewSelected >= 0)
 			|| (_searchedSelected >= 0)
-			|| _selectedMorePosts;
+			|| _selectedMorePosts
+			|| _selectedChatTypeFilter;
 	}
 	bool uniqueSearchResults() const;
 	bool hasHistoryInResults(not_null<History*> history) const;
@@ -330,6 +352,7 @@ private:
 	void repaintDialogRowCornerStatus(not_null<History*> history);
 
 	bool addBotAppRipple(QPoint origin, Fn<void()> updateCallback);
+	bool addQuickActionRipple(not_null<Row*> row, Fn<void()> updateCallback);
 
 	void setupShortcuts();
 	RowDescriptor computeJump(
@@ -455,9 +478,13 @@ private:
 	void handleChatListEntryRefreshes();
 	void moveSearchIn();
 	void dragPinnedFromTouch();
+	[[nodiscard]] bool hasChatTypeFilter() const;
 
 	void saveChatsFilterScrollState(FilterId filterId);
 	void restoreChatsFilterScrollState(FilterId filterId);
+
+	[[nodiscard]] not_null<Ui::QuickActionContext*> ensureQuickAction(
+		int64 key);
 
 	[[nodiscard]] bool lookupIsInBotAppButton(
 		Row *row,
@@ -485,6 +512,8 @@ private:
 	std::vector<std::unique_ptr<CollapsedRow>> _collapsedRows;
 	not_null<const style::DialogRow*> _st;
 	mutable std::unique_ptr<Ui::TopicJumpCache> _topicJumpCache;
+	bool _selectedChatTypeFilter = false;
+	bool _pressedChatTypeFilter = false;
 	bool _selectedMorePosts = false;
 	bool _pressedMorePosts = false;
 	int _collapsedSelected = -1;
@@ -542,6 +571,7 @@ private:
 	int _previewSelected = -1;
 	int _previewPressed = -1;
 	int _morePostsWidth = 0;
+	int _chatTypeFilterWidth = 0;
 
 	std::vector<std::unique_ptr<FakeRow>> _searchResults;
 	int _searchedCount = 0;
@@ -553,6 +583,7 @@ private:
 
 	std::unique_ptr<ChatSearchIn> _searchIn;
 	rpl::event_stream<ChatSearchTab> _changeSearchTabRequests;
+	rpl::event_stream<ChatTypeFilter> _changeSearchFilterRequests;
 	rpl::event_stream<> _cancelSearchRequests;
 	rpl::event_stream<> _cancelSearchFromRequests;
 	rpl::event_stream<> _changeSearchFromRequests;
@@ -579,7 +610,7 @@ private:
 
 	base::flat_map<FilterId, int> _chatsFilterScrollStates;
 
-	std::unordered_map<ChatsFilterTagsKey, QImage> _chatsFilterTags;
+	std::unordered_map<ChatsFilterTagsKey, TagCache> _chatsFilterTags;
 	bool _waitingAllChatListEntryRefreshesForTags = false;
 	rpl::lifetime _handleChatListEntryTagRefreshesLifetime;
 
@@ -597,6 +628,9 @@ private:
 	rpl::event_stream<QString> _completeHashtagRequests;
 	rpl::event_stream<> _refreshHashtagsRequests;
 	rpl::event_stream<UserId> _openBotMainAppRequests;
+
+	using QuickActionPtr = std::unique_ptr<Ui::QuickActionContext>;
+	base::flat_map<int64, QuickActionPtr> _quickActions;
 
 	RowDescriptor _chatPreviewRow;
 	bool _chatPreviewScheduled = false;

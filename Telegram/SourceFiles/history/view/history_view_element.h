@@ -16,6 +16,7 @@ class History;
 class HistoryBlock;
 class HistoryItem;
 struct HistoryMessageReply;
+struct PreparedServiceText;
 
 namespace Data {
 struct Reaction;
@@ -260,7 +261,7 @@ struct DateBadge : public RuntimeComponent<DateBadge, Element> {
 // displaying some text in layout of a service message above the message.
 struct ServicePreMessage
 	: public RuntimeComponent<ServicePreMessage, Element> {
-	void init(TextWithEntities string);
+	void init(PreparedServiceText string);
 
 	int resizeToWidth(int newWidth, bool chatWide);
 
@@ -269,6 +270,10 @@ struct ServicePreMessage
 		const PaintContext &context,
 		QRect g,
 		bool chatWide) const;
+	[[nodiscard]] ClickHandlerPtr textState(
+		QPoint point,
+		const StateRequest &request,
+		QRect g) const;
 
 	Ui::Text::String text;
 	int width = 0;
@@ -338,6 +343,8 @@ public:
 		Element *replacing,
 		Flag serviceFlag);
 
+	[[nodiscard]] virtual bool embedReactionsInBubble() const;
+
 	[[nodiscard]] not_null<ElementDelegate*> delegate() const;
 	[[nodiscard]] not_null<HistoryItem*> data() const;
 	[[nodiscard]] not_null<History*> history() const;
@@ -401,7 +408,7 @@ public:
 
 	// For blocks context this should be called only from recountDisplayDate().
 	void setDisplayDate(bool displayDate);
-	void setServicePreMessage(TextWithEntities text);
+	void setServicePreMessage(PreparedServiceText text);
 
 	bool computeIsAttachToPrevious(not_null<Element*> previous);
 
@@ -477,8 +484,6 @@ public:
 	[[nodiscard]] virtual int minWidthForMedia() const {
 		return 0;
 	}
-	[[nodiscard]] virtual bool hasFastReply() const;
-	[[nodiscard]] virtual bool displayFastReply() const;
 	[[nodiscard]] virtual std::optional<QSize> rightActionSize() const;
 	virtual void drawRightAction(
 		Painter &p,
@@ -561,9 +566,9 @@ public:
 
 	[[nodiscard]] bool markSponsoredViewed(int shownFromTop) const;
 
-	virtual void animateReaction(Ui::ReactionFlyAnimationArgs &&args);
+	virtual void animateReaction(Ui::ReactionFlyAnimationArgs &&args) = 0;
 	void animateUnreadReactions();
-	[[nodiscard]] virtual auto takeReactionAnimations()
+	[[nodiscard]] auto takeReactionAnimations()
 	-> base::flat_map<
 		Data::ReactionId,
 		std::unique_ptr<Ui::ReactionFlyAnimation>>;
@@ -617,6 +622,12 @@ protected:
 	void clearSpecialOnlyEmoji();
 	void checkSpecialOnlyEmoji();
 
+	void setupReactions(Element *replacing);
+	void refreshReactions();
+	bool updateReactions();
+
+	std::unique_ptr<Reactions::InlineList> _reactions;
+
 private:
 	// This should be called only from previousInBlocksChanged()
 	// to add required bits to the Composer mask
@@ -641,6 +652,7 @@ private:
 	void setTextWithLinks(
 		const TextWithEntities &text,
 		const std::vector<ClickHandlerPtr> &links = {});
+	void setReactions(std::unique_ptr<Reactions::InlineList> list);
 
 	struct TextWithLinks {
 		TextWithEntities text;
@@ -672,5 +684,8 @@ private:
 	not_null<Element*> view,
 	uint16 symbol,
 	int yfrom = 0);
+
+[[nodiscard]] Window::SessionController *ExtractController(
+	const ClickContext &context);
 
 } // namespace HistoryView

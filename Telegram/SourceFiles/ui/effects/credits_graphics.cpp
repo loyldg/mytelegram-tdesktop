@@ -554,15 +554,27 @@ TextWithEntities GenerateEntryName(const Data::CreditsHistoryEntry &entry) {
 				Info::BotStarRef::FormatCommission(entry.starrefCommission)
 			},
 			TextWithEntities::Simple)
-		: (entry.floodSkip
+		: entry.paidMessagesCount
+		? tr::lng_credits_paid_messages_fee(
+			tr::now,
+			lt_count,
+			entry.paidMessagesCount,
+			TextWithEntities::Simple)
+		: (entry.premiumMonthsForStars
+		? tr::lng_premium_summary_title
+		: entry.floodSkip
 		? tr::lng_credits_box_history_entry_api
 		: entry.reaction
 		? tr::lng_credits_box_history_entry_reaction_name
+		: entry.giftUpgraded
+		? tr::lng_credits_box_history_entry_gift_upgrade
 		: entry.bareGiveawayMsgId
 		? tr::lng_credits_box_history_entry_giveaway_name
 		: entry.converted
 		? tr::lng_credits_box_history_entry_gift_converted
-		: entry.starsConverted
+		: (entry.gift && !entry.in && entry.uniqueGift)
+		? tr::lng_credits_box_history_entry_gift_transfer
+		: (entry.starsConverted || (entry.gift && !entry.in))
 		? tr::lng_credits_box_history_entry_gift_sent
 		: entry.gift
 		? tr::lng_credits_box_history_entry_gift_name

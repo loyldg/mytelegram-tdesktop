@@ -122,6 +122,7 @@ public:
 
 	object_ptr<Ui::RpWidget> createTopBarSurrogate(QWidget *parent);
 
+	[[nodiscard]] bool hasBackButton() const;
 	[[nodiscard]] bool closeByOutsideClick() const;
 
 	void updateGeometry(
@@ -181,7 +182,6 @@ private:
 	void highlightTopBar();
 	void setupShortcuts();
 
-	[[nodiscard]] bool hasBackButton() const;
 	[[nodiscard]] bool willHaveBackButton(
 		const Window::SectionShow &params) const;
 
@@ -207,6 +207,8 @@ private:
 	void addTopBarMenuButton();
 	void addProfileCallsButton();
 	void showTopBarMenu(bool check);
+
+	const bool _isSeparatedWindow = false;
 
 	rpl::variable<Wrap> _wrap;
 	std::unique_ptr<Controller> _controller;

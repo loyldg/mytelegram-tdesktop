@@ -158,7 +158,7 @@ public:
 		Media,
 		GlobalMedia,
 		CommonGroups,
-		SimilarChannels,
+		SimilarPeers,
 		RequestsList,
 		ReactionsList,
 		SavedSublists,
@@ -304,12 +304,14 @@ public:
 		return _section;
 	}
 
-	bool validateMementoPeer(
+	[[nodiscard]] bool validateMementoPeer(
 		not_null<ContentMemento*> memento) const;
 
-	Wrap wrap() const;
-	rpl::producer<Wrap> wrapValue() const;
+	[[nodiscard]] Wrap wrap() const;
+	[[nodiscard]] rpl::producer<Wrap> wrapValue() const;
+	[[nodiscard]] not_null<Ui::RpWidget*> wrapWidget() const;
 	void setSection(not_null<ContentMemento*> memento);
+	[[nodiscard]] bool hasBackButton() const;
 
 	Ui::SearchFieldController *searchFieldController() const {
 		return _searchFieldController.get();

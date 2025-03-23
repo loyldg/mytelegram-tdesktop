@@ -20,6 +20,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/stickers/data_custom_emoji.h"
 #include "dialogs/dialogs_list.h"
 #include "dialogs/dialogs_three_state_icon.h"
+#include "dialogs/dialogs_quick_action.h"
 #include "dialogs/ui/dialogs_video_userpic.h"
 #include "history/history.h"
 #include "history/history_item.h"
@@ -28,12 +29,15 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/history_unread_things.h"
 #include "history/view/history_view_item_preview.h"
 #include "history/view/history_view_send_action.h"
+#include "lang/lang_instance.h"
 #include "lang/lang_keys.h"
+#include "lottie/lottie_icon.h"
 #include "main/main_session.h"
 #include "storage/localstorage.h"
 #include "support/support_helper.h"
 #include "ui/empty_userpic.h"
 #include "ui/painter.h"
+#include "ui/rect.h"
 #include "ui/power_saving.h"
 #include "ui/text/format_values.h"
 #include "ui/text/text_options.h"
@@ -64,6 +68,42 @@ const auto kPsaBadgePrefix = "cloud_lng_badge_psa_";
 		return !user->lastseen().isHidden();
 	}
 	return !history->isForum();
+}
+
+const style::font &SwipeActionFont(
+		Dialogs::Ui::QuickDialogActionLabel action,
+		int availableWidth) {
+	struct Entry final {
+		Dialogs::Ui::QuickDialogActionLabel action;
+		QString langId;
+		style::font font;
+	};
+	static auto Fonts = std::vector<Entry>();
+	for (auto &entry : Fonts) {
+		if (entry.action == action) {
+			if (entry.langId == Lang::GetInstance().id()) {
+				return entry.font;
+			}
+		}
+	}
+	constexpr auto kNormalFontSize = 13;
+	constexpr auto kMinFontSize = 5;
+	for (auto i = kNormalFontSize; i >= kMinFontSize; --i) {
+		auto font = style::font(
+			style::ConvertScale(i, style::Scale()),
+			st::semiboldFont->flags(),
+			st::semiboldFont->family());
+		if (font->width(ResolveQuickDialogLabel(action)) <= availableWidth
+			|| i == kMinFontSize) {
+			Fonts.emplace_back(Entry{
+				.action = action,
+				.langId = Lang::GetInstance().id(),
+				.font = std::move(font),
+			});
+			return Fonts.back().font;
+		}
+	}
+	Unexpected("SwipeActionFont: can't find font.");
 }
 
 void PaintRowTopRight(
@@ -344,11 +384,29 @@ void PaintRow(
 		draft = nullptr;
 	}
 
+	const auto history = entry->asHistory();
+	const auto thread = entry->asThread();
+	const auto sublist = entry->asSublist();
+
 	auto bg = context.active
 		? st::dialogsBgActive
 		: context.selected
 		? st::dialogsBgOver
 		: context.currentBg;
+	auto swipeTranslation = 0;
+	if (history
+		&& context.quickActionContext
+		&& !context.quickActionContext->ripple
+		&& (history->peer->id.value
+			== context.quickActionContext->data.msgBareId)) {
+		if (context.quickActionContext->data.translation != 0) {
+			swipeTranslation = context.quickActionContext->data.translation
+				* -2;
+		}
+	}
+	if (swipeTranslation) {
+		p.translate(-swipeTranslation, 0);
+	}
 	p.fillRect(geometry, bg);
 	if (!(flags & Flag::TopicJumpRipple)) {
 		auto ripple = context.active
@@ -356,10 +414,6 @@ void PaintRow(
 			: st::dialogsRippleBg;
 		row->paintRipple(p, 0, 0, context.width, &ripple->c);
 	}
-
-	const auto history = entry->asHistory();
-	const auto thread = entry->asThread();
-	const auto sublist = entry->asSublist();
 
 	if (flags & Flag::SavedMessages) {
 		EmptyUserpic::PaintSavedMessages(
@@ -411,11 +465,11 @@ void PaintRow(
 			from,
 			videoUserpic,
 			context,
-			context.narrow
+			(context.narrow
 				&& !badgesState.empty()
 				&& !draft
 				&& item
-				&& !item->isEmpty());
+				&& !item->isEmpty()));
 	}
 
 	const auto nameleft = context.st->nameLeft;
@@ -438,6 +492,9 @@ void PaintRow(
 
 	const auto promoted = (history && history->useTopPromotion())
 		&& !context.search;
+	const auto verifyInfo = (from && !from->isSelf())
+		? from->botVerifyDetails()
+		: nullptr;
 	if (promoted) {
 		const auto type = history->topPromotionType();
 		const auto custom = type.isEmpty()
@@ -449,6 +506,17 @@ void PaintRow(
 			? tr::lng_badge_psa_default(tr::now)
 			: custom;
 		PaintRowTopRight(p, text, rectForName, context);
+	} else if (verifyInfo) {
+		if (!rowBadge.ready(verifyInfo)) {
+			rowBadge.set(
+				verifyInfo,
+				from->owner().customEmojiManager().factory(),
+				customEmojiRepaint);
+		}
+		const auto &st = Ui::VerifiedStyle(context);
+		const auto position = rectForName.topLeft();
+		const auto skip = rowBadge.drawVerified(p, position, st);
+		rectForName.setLeft(position.x() + skip + st::dialogsChatTypeSkip);
 	} else if (from) {
 		if (const auto chatTypeIcon = ChatTypeIcon(from, context)) {
 			chatTypeIcon->paint(p, rectForName.topLeft(), context.width);
@@ -566,10 +634,10 @@ void PaintRow(
 								{},
 								true))).append(std::move(draftText));
 				}
-				const auto context = Core::MarkedTextContext{
+				const auto context = Core::TextContext({
 					.session = &thread->session(),
-					.customEmojiRepaint = customEmojiRepaint,
-				};
+					.repaint = customEmojiRepaint,
+				});
 				cache.setMarkedText(
 					st::dialogsTextStyle,
 					std::move(draftText),
@@ -694,6 +762,37 @@ void PaintRow(
 	}
 
 	p.setFont(st::semiboldFont);
+	const auto paintPeerBadge = [&](int rowNameWidth) {
+		const auto badgeWidth = rowBadge.drawGetWidth(p, {
+			.peer = from,
+			.rectForName = rectForName,
+			.nameWidth = rowNameWidth,
+			.outerWidth = context.width,
+			.verified = (context.active
+				? &st::dialogsVerifiedIconActive
+				: context.selected
+				? &st::dialogsVerifiedIconOver
+				: &st::dialogsVerifiedIcon),
+			.premium = &ThreeStateIcon(
+				st::dialogsPremiumIcon,
+				context.active,
+				context.selected),
+			.scam = (context.active
+				? &st::dialogsScamFgActive
+				: context.selected
+				? &st::dialogsScamFgOver
+				: &st::dialogsScamFg),
+			.premiumFg = (context.active
+				? &st::dialogsVerifiedIconBgActive
+				: context.selected
+				? &st::dialogsVerifiedIconBgOver
+				: &st::dialogsVerifiedIconBg),
+			.customEmojiRepaint = customEmojiRepaint,
+			.now = context.now,
+			.paused = context.paused,
+		});
+		rectForName.setWidth(rectForName.width() - badgeWidth);
+	};
 	if (flags
 		& (Flag::SavedMessages
 			| Flag::RepliesMessages
@@ -710,6 +809,9 @@ void PaintRow(
 			? tr::lng_my_notes(tr::now)
 			: tr::lng_hidden_author_messages(tr::now);
 		const auto textWidth = st::semiboldFont->width(text);
+		if (!context.search && (flags & Flag::VerifyCodes)) {
+			paintPeerBadge(textWidth);
+		}
 		if (textWidth > rectForName.width()) {
 			text = st::semiboldFont->elided(text, rectForName.width());
 		}
@@ -718,40 +820,14 @@ void PaintRow(
 			: context.selected
 			? st::dialogsNameFgOver
 			: st::dialogsNameFg);
-		p.drawTextLeft(rectForName.left(), rectForName.top(), context.width, text);
+		p.drawTextLeft(
+			rectForName.left(),
+			rectForName.top(),
+			context.width,
+			text);
 	} else if (from) {
 		if ((history || sublist) && !context.search) {
-			const auto badgeWidth = rowBadge.drawGetWidth(
-				p,
-				rectForName,
-				rowName.maxWidth(),
-				context.width,
-				{
-					.peer = from,
-					.verified = (context.active
-						? &st::dialogsVerifiedIconActive
-						: context.selected
-						? &st::dialogsVerifiedIconOver
-						: &st::dialogsVerifiedIcon),
-					.premium = &ThreeStateIcon(
-						st::dialogsPremiumIcon,
-						context.active,
-						context.selected),
-					.scam = (context.active
-						? &st::dialogsScamFgActive
-						: context.selected
-						? &st::dialogsScamFgOver
-						: &st::dialogsScamFg),
-					.premiumFg = (context.active
-						? &st::dialogsVerifiedIconBgActive
-						: context.selected
-						? &st::dialogsVerifiedIconBgOver
-						: &st::dialogsVerifiedIconBg),
-					.customEmojiRepaint = customEmojiRepaint,
-					.now = context.now,
-					.paused = context.paused,
-				});
-			rectForName.setWidth(rectForName.width() - badgeWidth);
+			paintPeerBadge(rowName.maxWidth());
 		}
 		p.setPen(context.active
 			? st::dialogsNameFgActive
@@ -799,6 +875,58 @@ void PaintRow(
 				+ (tag->width() / style::DevicePixelRatio());
 		}
 	}
+	if (swipeTranslation) {
+		p.translate(swipeTranslation, 0);
+		const auto swipeActionRect = QRect(
+			rect::right(geometry) - swipeTranslation,
+			geometry.y(),
+			swipeTranslation,
+			geometry.height());
+		p.setClipRegion(swipeActionRect);
+		const auto labelType = ResolveQuickDialogLabel(
+			history,
+			context.quickActionContext->action,
+			context.filter);
+		p.fillRect(swipeActionRect, ResolveQuickActionBg(labelType));
+		if (context.quickActionContext->data.reachRatio) {
+			p.setPen(Qt::NoPen);
+			p.setBrush(ResolveQuickActionBgActive(labelType));
+			const auto r = swipeTranslation
+				* context.quickActionContext->data.reachRatio;
+			const auto offset = st::dialogsQuickActionSize
+				+ st::dialogsQuickActionSize / 2.;
+			p.drawEllipse(QPointF(geometry.width() - offset, offset), r, r);
+		}
+		const auto quickWidth = st::dialogsQuickActionSize * 3;
+		DrawQuickAction(
+			p,
+			QRect(
+				rect::right(geometry) - quickWidth,
+				geometry.y(),
+				quickWidth,
+				geometry.height()),
+			context.quickActionContext->icon.get(),
+			labelType);
+		p.setClipping(false);
+	}
+	if (const auto quick = context.quickActionContext;
+			quick && quick->ripple && quick->rippleFg) {
+		const auto labelType = ResolveQuickDialogLabel(
+			history,
+			context.quickActionContext->action,
+			context.filter);
+		const auto ripple = ResolveQuickActionBg(labelType);
+		const auto size = st::dialogsQuickActionRippleSize;
+		const auto x = geometry.width() - size;
+		quick->ripple->paint(p, x, 0, size, &ripple->c);
+		quick->rippleFg->paint(p, x, 0, size, &st::premiumButtonFg->c);
+		if (quick->ripple->empty()) {
+			quick->ripple.reset();
+		}
+		if (quick->rippleFg->empty()) {
+			quick->rippleFg.reset();
+		}
+	}
 }
 
 } // namespace
@@ -837,6 +965,14 @@ const style::icon *ChatTypeIcon(
 			context.selected);
 	}
 	return nullptr;
+}
+
+const style::VerifiedBadge &VerifiedStyle(const PaintContext &context) {
+	return context.active
+		? st::dialogsVerifiedColorsActive
+		: context.selected
+		? st::dialogsVerifiedColorsOver
+		: st::dialogsVerifiedColors;
 }
 
 void RowPainter::Paint(

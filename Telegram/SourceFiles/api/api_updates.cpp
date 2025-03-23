@@ -1218,7 +1218,9 @@ void Updates::applyUpdatesNoPtsCheck(const MTPUpdates &updates) {
 				MTP_int(d.vttl_period().value_or_empty()),
 				MTPint(), // quick_reply_shortcut_id
 				MTPlong(), // effect
-				MTPFactCheck()),
+				MTPFactCheck(),
+				MTPint(), // report_delivery_until_date
+				MTPlong()), // paid_message_stars
 			MessageFlags(),
 			NewMessageType::Unread);
 	} break;
@@ -1255,7 +1257,9 @@ void Updates::applyUpdatesNoPtsCheck(const MTPUpdates &updates) {
 				MTP_int(d.vttl_period().value_or_empty()),
 				MTPint(), // quick_reply_shortcut_id
 				MTPlong(), // effect
-				MTPFactCheck()),
+				MTPFactCheck(),
+				MTPint(), // report_delivery_until_date
+				MTPlong()), // paid_message_stars
 			MessageFlags(),
 			NewMessageType::Unread);
 	} break;
@@ -2707,8 +2711,8 @@ void Updates::feedUpdate(const MTPUpdate &update) {
 
 	case mtpc_updatePaidReactionPrivacy: {
 		const auto &data = update.c_updatePaidReactionPrivacy();
-		_session->api().globalPrivacy().updatePaidReactionAnonymous(
-			mtpIsTrue(data.vprivate()));
+		_session->api().globalPrivacy().updatePaidReactionShownPeer(
+			Api::ParsePaidReactionShownPeer(_session, data.vprivate()));
 	} break;
 
 	}

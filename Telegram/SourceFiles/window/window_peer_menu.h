@@ -15,6 +15,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 class History;
 
+namespace Api {
+struct SendOptions;
+} // namespace Api
+
 namespace Ui {
 class RpWidget;
 class BoxContent;
@@ -36,6 +40,7 @@ class MainList;
 struct EntryState;
 struct UnreadState;
 class Key;
+class Entry;
 } // namespace Dialogs
 
 namespace ChatHelpers {
@@ -146,7 +151,9 @@ object_ptr<Ui::BoxContent> PrepareChooseRecipientBox(
 	rpl::producer<QString> titleOverride = nullptr,
 	FnMut<void()> &&successCallback = nullptr,
 	InlineBots::PeerTypes typesRestriction = 0,
-	Fn<void(std::vector<not_null<Data::Thread*>>)> sendMany = nullptr);
+	Fn<void(
+		std::vector<not_null<Data::Thread*>>,
+		Api::SendOptions)> sendMany = nullptr);
 QPointer<Ui::BoxContent> ShowChooseRecipientBox(
 	not_null<Window::SessionNavigation*> navigation,
 	FnMut<bool(not_null<Data::Thread*>)> &&chosen,
@@ -190,6 +197,10 @@ void ToggleMessagePinned(
 	not_null<Window::SessionNavigation*> navigation,
 	FullMsgId itemId,
 	bool pin);
+void TogglePinnedThread(
+	not_null<Window::SessionController*> controller,
+	not_null<Dialogs::Entry*> entry,
+	FilterId filterId);
 void HidePinnedBar(
 	not_null<Window::SessionNavigation*> navigation,
 	not_null<PeerData*> peer,
@@ -203,5 +214,7 @@ void UnpinAllMessages(
 void MarkAsReadThread(not_null<Data::Thread*> thread);
 
 void AddSeparatorAndShiftUp(const PeerMenuCallback &addAction);
+
+[[nodiscard]] bool IsArchived(not_null<History*> history);
 
 } // namespace Window

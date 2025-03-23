@@ -19,6 +19,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "boxes/peers/edit_contact_box.h"
 #include "boxes/peers/edit_participants_box.h"
 #include "boxes/peers/edit_peer_info_box.h"
+#include "boxes/peers/verify_peers_box.h"
 #include "boxes/report_messages_box.h"
 #include "boxes/share_box.h"
 #include "boxes/star_gift_box.h"
@@ -43,6 +44,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "dialogs/ui/dialogs_message_view.h"
 #include "history/history.h"
 #include "history/history_item.h"
+#include "history/history_item_components.h"
 #include "history/history_item_helpers.h"
 #include "history/view/history_view_item_preview.h"
 #include "info/bot/earn/info_bot_earn_widget.h"
@@ -68,8 +70,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/boxes/peer_qr_box.h"
 #include "ui/boxes/report_box_graphics.h"
 #include "ui/controls/userpic_button.h"
+#include "ui/effects/toggle_arrow.h"
 #include "ui/painter.h"
 #include "ui/rect.h"
+#include "ui/ui_utility.h"
 #include "ui/text/format_values.h"
 #include "ui/text/text_utilities.h" // Ui::Text::ToUpper
 #include "ui/text/text_variant.h"
@@ -91,6 +95,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_layers.h"
 #include "styles/style_menu_icons.h"
 #include "styles/style_settings.h" // settingsButtonRightSkip.
+#include "styles/style_window.h" // mainMenuToggleFourStrokes.
 
 #include <QtGui/QGuiApplication>
 #include <QtGui/QClipboard>
@@ -506,6 +511,8 @@ base::options::toggle ShowPeerIdBelowAbout({
 			dayHoursTextValue(state->day.value())
 		) | rpl::after_next(recount),
 		st::infoHoursValue);
+	const auto timingArrow = Ui::CreateChild<Ui::RpWidget>(openedWrap);
+	timingArrow->resize(Size(timing->st().style.font->height));
 	timing->setAttribute(Qt::WA_TransparentForMouseEvents);
 	state->opened.value() | rpl::start_with_next([=](bool value) {
 		opened->setTextColorOverride(value
@@ -519,7 +526,8 @@ base::options::toggle ShowPeerIdBelowAbout({
 		timing->sizeValue()
 	) | rpl::start_with_next([=](int width, int h1, QSize size) {
 		opened->moveToLeft(0, 0, width);
-		timing->moveToRight(0, 0, width);
+		timingArrow->moveToRight(0, 0, width);
+		timing->moveToRight(timingArrow->width(), 0, width);
 
 		const auto margins = opened->getMargins();
 		const auto added = margins.top() + margins.bottom();
@@ -532,10 +540,7 @@ base::options::toggle ShowPeerIdBelowAbout({
 		tr::lng_info_hours_label(),
 		st::infoLabel);
 	label->setAttribute(Qt::WA_TransparentForMouseEvents);
-	const auto link = Ui::CreateChild<Ui::LinkButton>(
-		labelWrap,
-		QString());
-	rpl::combine(
+	auto linkText = rpl::combine(
 		state->nonTrivial.value(),
 		state->hours.value(),
 		state->mine.value(),
@@ -550,10 +555,12 @@ base::options::toggle ShowPeerIdBelowAbout({
 			: my
 			? tr::lng_info_hours_my_time()
 			: tr::lng_info_hours_local_time();
-	}) | rpl::flatten_latest(
-	) | rpl::start_with_next([=](const QString &text) {
-		link->setText(text);
-	}, link->lifetime());
+	}) | rpl::flatten_latest();
+	const auto link = Ui::CreateChild<Ui::RoundButton>(
+		labelWrap,
+		std::move(linkText),
+		st::defaultTableSmallButton);
+	link->setTextTransform(Ui::RoundButton::TextTransform::NoTransform);
 	link->setClickedCallback([=] {
 		state->myTimezone = !state->myTimezone.current();
 		state->expanded = true;
@@ -577,6 +584,38 @@ base::options::toggle ShowPeerIdBelowAbout({
 			inner,
 			object_ptr<Ui::VerticalLayout>(inner)));
 	other->toggleOn(state->expanded.value(), anim::type::normal);
+	constexpr auto kSlideDuration = float64(st::slideWrapDuration);
+	other->setDuration(kSlideDuration);
+	{
+		const auto arrowAnimation
+			= other->lifetime().make_state<Ui::Animations::Basic>();
+		arrowAnimation->init([=] {
+			timingArrow->update();
+			if (!other->animating()) {
+				arrowAnimation->stop();
+			}
+		});
+		timingArrow->paintRequest() | rpl::start_with_next([=] {
+			auto p = QPainter(timingArrow);
+			const auto progress = other->animating()
+				? (crl::now() - arrowAnimation->started()) / kSlideDuration
+				: 1.;
+
+			const auto path = Ui::ToggleUpDownArrowPath(
+				timingArrow->width() / 2,
+				timingArrow->height() / 2,
+				st::infoHoursArrowSize,
+				st::mainMenuToggleFourStrokes,
+				other->toggled() ? progress : 1 - progress);
+
+			auto hq = PainterHighQualityEnabler(p);
+			p.fillPath(path, timing->st().textFg);
+		}, timingArrow->lifetime());
+		state->expanded.value() | rpl::start_with_next([=] {
+			arrowAnimation->start();
+		}, other->lifetime());
+	}
+
 	other->finishAnimating();
 	const auto days = other->entity();
 
@@ -738,8 +777,7 @@ auto AddActionButton(
 		ToggleOn &&toggleOn,
 		Callback &&callback,
 		const style::icon *icon,
-		const style::SettingsButton &st
-			= st::infoSharedMediaButton) {
+		const style::SettingsButton &st = st::infoSharedMediaButton) {
 	auto result = parent->add(object_ptr<Ui::SlideWrap<Ui::SettingsButton>>(
 		parent,
 		object_ptr<Ui::SettingsButton>(
@@ -857,10 +895,10 @@ rpl::producer<uint64> AddCurrencyAction(
 				.append(QChar(' '))
 				.append(Info::ChannelEarn::MajorPart(balance))
 				.append(Info::ChannelEarn::MinorPart(balance)),
-			Core::MarkedTextContext{
+			Core::TextContext({
 				.session = &user->session(),
-				.customEmojiRepaint = [=] { name->update(); },
-			});
+				.repaint = [=] { name->update(); },
+			}));
 		name->resizeToNaturalWidth(available);
 		name->moveToRight(st::settingsButtonRightSkip, st.padding.top());
 	}, name->lifetime());
@@ -930,10 +968,10 @@ rpl::producer<StarsAmount> AddCreditsAction(
 			base::duplicate(icon)
 				.append(QChar(' '))
 				.append(Lang::FormatStarsAmountDecimal(balance)),
-			Core::MarkedTextContext{
+			Core::TextContext({
 				.session = &user->session(),
-				.customEmojiRepaint = [=] { name->update(); },
-			});
+				.repaint = [=] { name->update(); },
+			}));
 		name->resizeToNaturalWidth(available);
 		name->moveToRight(st::settingsButtonRightSkip, st.padding.top());
 	}, name->lifetime());
@@ -960,6 +998,7 @@ private:
 	object_ptr<Ui::RpWidget> setupPersonalChannel(not_null<UserData*> user);
 	object_ptr<Ui::RpWidget> setupInfo();
 	object_ptr<Ui::RpWidget> setupMuteToggle();
+	void setupAboutVerification();
 	void setupMainApp();
 	void setupBotPermissions();
 	void setupMainButtons();
@@ -1015,6 +1054,7 @@ private:
 	void addEditContactAction(not_null<UserData*> user);
 	void addDeleteContactAction(not_null<UserData*> user);
 	void addBotCommandActions(not_null<UserData*> user);
+	void addFastButtonsMode(not_null<UserData*> user);
 	void addReportAction();
 	void addBlockAction(not_null<UserData*> user);
 	void addLeaveChannelAction(not_null<ChannelData*> channel);
@@ -1240,19 +1280,18 @@ object_ptr<Ui::RpWidget> DetailsFiller::setupInfo() {
 			not_null<Ui::FlatLabel*> label,
 			int rightSkip) {
 		const auto parent = label->parentWidget();
+		const auto container = result.data();
 		rpl::combine(
-			result->widthValue(),
+			container->widthValue(),
 			label->geometryValue(),
 			button->sizeValue()
 		) | rpl::start_with_next([=](int width, QRect, QSize buttonSize) {
 			button->moveToRight(
 				rightSkip,
 				(parent->height() - buttonSize.height()) / 2);
-			label->resizeToWidth(width
-				- rightSkip
-				- label->geometry().left()
-				- st::lineWidth * 2
-				- buttonSize.width());
+			const auto x = Ui::MapFrom(container, label, QPoint(0, 0)).x();
+			const auto s = Ui::MapFrom(container, button, QPoint(0, 0)).x();
+			label->resizeToWidth(s - x);
 		}, button->lifetime());
 	};
 	const auto controller = _controller->parentController();
@@ -1371,7 +1410,7 @@ object_ptr<Ui::RpWidget> DetailsFiller::setupInfo() {
 		const auto qrButton = Ui::CreateChild<Ui::IconButton>(
 			usernameLine.text->parentWidget(),
 			st::infoProfileLabeledButtonQr);
-		const auto rightSkip = st::infoProfileLabeledButtonQrRightSkip;
+		const auto rightSkip = 0;// st::infoProfileLabeledButtonQrRightSkip;
 		fitLabelToButton(qrButton, usernameLine.text, rightSkip);
 		fitLabelToButton(qrButton, usernameLine.subtext, rightSkip);
 		qrButton->setClickedCallback([=] {
@@ -1449,7 +1488,7 @@ object_ptr<Ui::RpWidget> DetailsFiller::setupInfo() {
 			const auto qr = Ui::CreateChild<Ui::IconButton>(
 				linkLine.text->parentWidget(),
 				st::infoProfileLabeledButtonQr);
-			const auto rightSkip = st::infoProfileLabeledButtonQrRightSkip;
+			const auto rightSkip = 0;// st::infoProfileLabeledButtonQrRightSkip;
 			fitLabelToButton(qr, linkLine.text, rightSkip);
 			fitLabelToButton(qr, linkLine.subtext, rightSkip);
 			qr->setClickedCallback([=, peer = _peer] {
@@ -1560,8 +1599,6 @@ object_ptr<Ui::RpWidget> DetailsFiller::setupPersonalChannel(
 		}));
 		onlyChannelWrap->finishAnimating();
 
-		Ui::AddDivider(onlyChannelWrap->entity());
-
 		auto text = rpl::duplicate(
 			channel
 		) | rpl::map([=](ChannelData *channel) {
@@ -1591,6 +1628,8 @@ object_ptr<Ui::RpWidget> DetailsFiller::setupPersonalChannel(
 			onlyChannelWrap,
 			st::infoIconMediaChannel,
 			st::infoPersonalChannelIconPosition);
+
+		Ui::AddDivider(onlyChannelWrap->entity());
 	}
 
 	{
@@ -1605,6 +1644,10 @@ object_ptr<Ui::RpWidget> DetailsFiller::setupPersonalChannel(
 				&& user->personalChannelMessageId();
 		}));
 		messageChannelWrap->finishAnimating();
+		messageChannelWrap->toggledValue(
+		) | rpl::filter(rpl::mappers::_1) | rpl::start_with_next([=] {
+			messageChannelWrap->resizeToWidth(messageChannelWrap->width());
+		}, messageChannelWrap->lifetime());
 
 		const auto clear = [=] {
 			while (messageChannelWrap->entity()->count()) {
@@ -1620,7 +1663,7 @@ object_ptr<Ui::RpWidget> DetailsFiller::setupPersonalChannel(
 
 			messageChannelWrap->toggle(false, anim::type::instant);
 			clear();
-			Ui::AddDivider(messageChannelWrap->entity());
+
 			Ui::AddSkip(messageChannelWrap->entity());
 
 			const auto inner = messageChannelWrap->entity()->add(
@@ -1654,17 +1697,28 @@ object_ptr<Ui::RpWidget> DetailsFiller::setupPersonalChannel(
 			const auto preview = Ui::CreateChild<Ui::RpWidget>(line);
 			auto &lifetime = preview->lifetime();
 			using namespace Dialogs::Ui;
-			const auto previewView = lifetime.make_state<MessageView>();
-			const auto previewUpdate = [=] { preview->update(); };
+			struct State {
+				MessageView view;
+				HistoryItem *item = nullptr;
+				rpl::lifetime lifetime;
+			};
+			const auto state = lifetime.make_state<State>();
+			state->item = item;
+			item->history()->session().changes().realtimeMessageUpdates(
+				Data::MessageUpdate::Flag::Destroyed
+			) | rpl::start_with_next([=](const Data::MessageUpdate &update) {
+				if (update.item == state->item) {
+					state->lifetime.destroy();
+					state->item = nullptr;
+					preview->update();
+				}
+			}, state->lifetime);
+
 			preview->resize(0, st::infoLabeled.style.font->height);
-			if (!previewView->dependsOn(item)) {
-				previewView->prepare(item, nullptr, previewUpdate, {});
-			}
 			preview->paintRequest(
-			) | rpl::start_with_next([=, fullId = item->fullId()](
-					const QRect &rect) {
+			) | rpl::start_with_next([=] {
 				auto p = Painter(preview);
-				const auto item = user->session().data().message(fullId);
+				const auto item = state->item;
 				if (!item) {
 					p.setPen(st::infoPersonalChannelDateLabel.textFg);
 					p.setBrush(Qt::NoBrush);
@@ -1675,30 +1729,22 @@ object_ptr<Ui::RpWidget> DetailsFiller::setupPersonalChannel(
 						style::al_left);
 					return;
 				}
-				if (previewView->prepared(item, nullptr)) {
-					previewView->paint(p, preview->rect(), {
-						.st = &st::defaultDialogRow,
-						.currentBg = st::boxBg->b,
-					});
-				} else if (!previewView->dependsOn(item)) {
-					p.setPen(st::infoPersonalChannelDateLabel.textFg);
-					p.setBrush(Qt::NoBrush);
-					p.setFont(st::infoPersonalChannelDateLabel.style.font);
-					p.drawText(
-						preview->rect(),
-						tr::lng_contacts_loading(tr::now),
-						style::al_left);
-					previewView->prepare(item, nullptr, previewUpdate, {});
-					preview->update();
+				if (!state->view.prepared(item, nullptr)) {
+					const auto repaint = [=] { preview->update(); };
+					state->view.prepare(item, nullptr, repaint, {});
 				}
+				state->view.paint(p, preview->rect(), {
+					.st = &st::defaultDialogRow,
+					.currentBg = st::boxBg->b,
+				});
 			}, preview->lifetime());
 
-			line->sizeValue(
+			line->sizeValue() | rpl::filter_size(
 			) | rpl::start_with_next([=](const QSize &size) {
 				const auto left = stLabeled.left();
 				const auto right = st::infoPersonalChannelDateSkip;
 				const auto top = stLabeled.top();
-				date->moveToRight(right, top);
+				date->moveToRight(right, top, size.width());
 
 				name->resizeToWidth(size.width()
 					- left
@@ -1729,14 +1775,9 @@ object_ptr<Ui::RpWidget> DetailsFiller::setupPersonalChannel(
 						st::infoProfileLabeledPadding.bottom()));
 			}
 			{
-				const auto button = Ui::CreateChild<Ui::RippleButton>(
+				const auto button = Ui::CreateSimpleRectButton(
 					messageChannelWrap->entity(),
 					st::defaultRippleAnimation);
-				button->paintRequest(
-				) | rpl::start_with_next([=](const QRect &rect) {
-					auto p = QPainter(button);
-					button->paintRipple(p, 0, 0);
-				}, button->lifetime());
 				inner->geometryValue(
 				) | rpl::start_with_next([=](const QRect &rect) {
 					button->setGeometry(rect);
@@ -1748,9 +1789,12 @@ object_ptr<Ui::RpWidget> DetailsFiller::setupPersonalChannel(
 						msg);
 				});
 				button->lower();
+				inner->lifetime().make_state<base::unique_qptr<Ui::RpWidget>>(
+					button);
 			}
 			inner->setAttribute(Qt::WA_TransparentForMouseEvents);
 			Ui::AddSkip(messageChannelWrap->entity());
+			Ui::AddDivider(messageChannelWrap->entity());
 
 			Ui::ToggleChildrenVisibility(messageChannelWrap->entity(), true);
 			Ui::ToggleChildrenVisibility(line, true);
@@ -1833,6 +1877,26 @@ object_ptr<Ui::RpWidget> DetailsFiller::setupMuteToggle() {
 		st::infoIconNotifications,
 		st::infoNotificationsIconPosition);
 	return result;
+}
+
+void DetailsFiller::setupAboutVerification() {
+	const auto peer = _peer;
+	const auto inner = _wrap->add(object_ptr<Ui::VerticalLayout>(_wrap));
+	peer->session().changes().peerFlagsValue(
+		peer,
+		Data::PeerUpdate::Flag::VerifyInfo
+	) | rpl::start_with_next([=] {
+		const auto info = peer->botVerifyDetails();
+		while (inner->count()) {
+			delete inner->widgetAt(0);
+		}
+		if (!info) {
+			Ui::AddDivider(inner);
+		} else if (!info->description.empty()) {
+			Ui::AddDividerText(inner, rpl::single(info->description));
+		}
+		inner->resizeToWidth(inner->width());
+	}, inner->lifetime());
 }
 
 void DetailsFiller::setupMainApp() {
@@ -2103,10 +2167,14 @@ Ui::MultiSlideTracker DetailsFiller::fillDiscussionButtons(
 object_ptr<Ui::RpWidget> DetailsFiller::fill() {
 	Expects(!_topic || !_topic->creating());
 
+	if (!_topic) {
+		setupAboutVerification();
+	} else {
+		add(object_ptr<Ui::BoxContentDivider>(_wrap));
+	}
 	if (const auto user = _peer->asUser()) {
 		add(setupPersonalChannel(user));
 	}
-	add(object_ptr<Ui::BoxContentDivider>(_wrap));
 	add(CreateSkipWidget(_wrap));
 	add(setupInfo());
 	if (const auto user = _peer->asUser()) {
@@ -2285,7 +2353,36 @@ void ActionsFiller::addDeleteContactAction(not_null<UserData*> user) {
 		&st::infoIconDelete);
 }
 
+void ActionsFiller::addFastButtonsMode(not_null<UserData*> user) {
+	Expects(user->isBot());
+
+	const auto bots = &user->session().fastButtonsBots();
+	const auto button = _wrap->add(object_ptr<Ui::SettingsButton>(
+		_wrap,
+		rpl::single(u"Fast buttons mode"_q),
+		st::infoSharedMediaButton));
+	object_ptr<Info::Profile::FloatingIcon>(
+		button,
+		st::infoIconMediaBot,
+		st::infoSharedMediaButtonIconPosition);
+
+	AddSkip(_wrap);
+	AddDivider(_wrap);
+	AddSkip(_wrap);
+
+	button->toggleOn(bots->enabledValue(user));
+	button->toggledValue(
+	) | rpl::filter([=](bool value) {
+		return value != bots->enabled(user);
+	}) | rpl::start_with_next([=](bool value) {
+		bots->setEnabled(user, value);
+	}, button->lifetime());
+}
+
 void ActionsFiller::addBotCommandActions(not_null<UserData*> user) {
+	if (FastButtonsMode()) {
+		addFastButtonsMode(user);
+	}
 	const auto window = _controller->parentController();
 	const auto findBotCommand = [user](const QString &command) {
 		if (!user->isBot()) {
@@ -2718,7 +2815,8 @@ Cover *AddCover(
 		: container->add(object_ptr<Cover>(
 			container,
 			controller->parentController(),
-			peer));
+			peer,
+			[=] { return controller->wrapWidget(); }));
 	result->showSection(
 	) | rpl::start_with_next([=](Section section) {
 		controller->showSection(topic
