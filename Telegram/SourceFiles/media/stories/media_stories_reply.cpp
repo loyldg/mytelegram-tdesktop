@@ -841,7 +841,9 @@ void ReplyArea::show(
 		peer
 	) | rpl::map([=](bool can) {
 		using namespace HistoryView::Controls;
-		return (can
+		return peer->session().frozen()
+			? WriteRestriction{ .type = WriteRestrictionType::Frozen }
+			: (can
 			|| !user
 			|| !user->requiresPremiumToWrite()
 			|| user->session().premium())
@@ -903,8 +905,7 @@ bool ReplyArea::showSlowmodeError() {
 				lt_left,
 				Ui::FormatDurationWordsSlowmode(left));
 		} else if (peer->slowmodeApplied()) {
-			const auto history = peer->owner().history(peer);
-			if (const auto item = history->latestSendingMessage()) {
+			if (peer->owner().history(peer)->latestSendingMessage()) {
 				return tr::lng_slowmode_no_many(tr::now);
 			}
 		}

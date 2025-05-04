@@ -497,15 +497,19 @@ struct ActionPaymentSent {
 };
 
 struct ActionPhoneCall {
-	enum class DiscardReason {
+	enum class State {
 		Unknown,
 		Missed,
 		Disconnect,
 		Hangup,
 		Busy,
-		AllowGroupCall,
+		MigrateConferenceCall,
+		Invitation,
+		Active,
 	};
-	DiscardReason discardReason = DiscardReason::Unknown;
+
+	uint64 conferenceId = 0;
+	State state = State::Unknown;
 	int duration = 0;
 };
 
@@ -662,6 +666,15 @@ struct ActionStarGift {
 	bool limited = false;
 };
 
+struct ActionPaidMessagesRefunded {
+	int messages = 0;
+	int64 stars = 0;
+};
+
+struct ActionPaidMessagesPrice {
+	int stars = 0;
+};
+
 struct ServiceAction {
 	std::variant<
 		v::null_t,
@@ -707,7 +720,9 @@ struct ServiceAction {
 		ActionPaymentRefunded,
 		ActionGiftStars,
 		ActionPrizeStars,
-		ActionStarGift> content;
+		ActionStarGift,
+		ActionPaidMessagesRefunded,
+		ActionPaidMessagesPrice> content;
 };
 
 ServiceAction ParseServiceAction(

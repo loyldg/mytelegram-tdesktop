@@ -79,6 +79,10 @@ public:
 
 	[[nodiscard]] int pinnedGiftsLimit() const;
 
+	[[nodiscard]] bool callsDisabledForSession() const;
+	[[nodiscard]] int confcallSizeLimit() const;
+	[[nodiscard]] bool confcallPrioritizeVP8() const;
+
 	void refresh(bool force = false);
 
 private:
@@ -123,6 +127,9 @@ private:
 	rpl::event_stream<std::vector<QString>> _ignoreRestrictionChanges;
 
 	std::vector<QString> _startRefPrefixes;
+
+	crl::time _lastFrozenRefresh = 0;
+	rpl::lifetime _frozenTrackLifetime;
 
 	rpl::lifetime _lifetime;
 

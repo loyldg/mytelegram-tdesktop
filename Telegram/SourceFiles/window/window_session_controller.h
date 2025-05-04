@@ -180,6 +180,8 @@ public:
 
 	[[nodiscard]] Main::Session &session() const;
 
+	bool showFrozenError();
+
 	virtual void showSection(
 		std::shared_ptr<SectionMemento> memento,
 		const SectionShow &params = SectionShow()) = 0;
@@ -262,6 +264,12 @@ public:
 		PeerId ownerId,
 		const QString &entity,
 		Fn<void(QString)> fail = nullptr);
+	void resolveConferenceCall(
+		QString slug,
+		FullMsgId contextId);
+	void resolveConferenceCall(
+		MsgId inviteMsgId,
+		FullMsgId contextId);
 
 	base::weak_ptr<Ui::Toast::Instance> showToast(
 		Ui::Toast::Config &&config);
@@ -288,6 +296,10 @@ private:
 	void resolveChannelById(
 		ChannelId channelId,
 		Fn<void(not_null<ChannelData*>)> done);
+	void resolveConferenceCall(
+		QString slug,
+		MsgId inviteMsgId,
+		FullMsgId contextId);
 
 	void resolveDone(
 		const MTPcontacts_ResolvedPeer &result,
@@ -326,6 +338,11 @@ private:
 
 	QString _collectibleEntity;
 	mtpRequestId _collectibleRequestId = 0;
+
+	QString _conferenceCallSlug;
+	MsgId _conferenceCallInviteMsgId;
+	FullMsgId _conferenceCallResolveContextId;
+	mtpRequestId _conferenceCallRequestId = 0;
 
 };
 
@@ -525,7 +542,7 @@ public:
 
 	void toggleChooseChatTheme(
 		not_null<PeerData*> peer,
-		std::optional<bool> show = std::nullopt) const;
+		std::optional<bool> show = std::nullopt);
 	void finishChatThemeEdit(not_null<PeerData*> peer);
 
 	[[nodiscard]] bool mainSectionShown() const {
