@@ -703,7 +703,7 @@ bool PeerData::canTransferGifts() const {
 bool PeerData::canEditMessagesIndefinitely() const {
 	if (const auto user = asUser()) {
 		return user->isSelf();
-	} else if (const auto chat = asChat()) {
+	} else if (isChat()) {
 		return false;
 	} else if (const auto channel = asChannel()) {
 		return channel->isMegagroup()
@@ -1349,6 +1349,10 @@ bool PeerData::isVerifyCodes() const {
 	return (id == kVerifyCodesId);
 }
 
+bool PeerData::isFreezeAppealChat() const {
+	return username().compare(u"spambot"_q, Qt::CaseInsensitive) == 0;
+}
+
 bool PeerData::sharedMediaInfo() const {
 	return isSelf() || isRepliesChat();
 }
@@ -1406,7 +1410,7 @@ Data::ForumTopic *PeerData::forumTopicFor(MsgId rootId) const {
 }
 
 bool PeerData::allowsForwarding() const {
-	if (const auto user = asUser()) {
+	if (isUser()) {
 		return true;
 	} else if (const auto channel = asChannel()) {
 		return channel->allowsForwarding();

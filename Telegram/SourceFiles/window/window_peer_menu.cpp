@@ -390,7 +390,8 @@ bool PinnedLimitReached(
 
 void TogglePinnedThread(
 		not_null<Window::SessionController*> controller,
-		not_null<Dialogs::Entry*> entry) {
+		not_null<Dialogs::Entry*> entry,
+		Fn<void()> onToggled) {
 	if (!entry->folderKnown()) {
 		return;
 	}
@@ -410,6 +411,9 @@ void TogglePinnedThread(
 			MTP_inputDialogPeer(history->peer->input)
 		)).done([=] {
 			owner->notifyPinnedDialogsOrderUpdated();
+			if (onToggled) {
+				onToggled();
+			}
 		}).send();
 		if (isPinned) {
 			controller->content()->dialogsToUp();
@@ -421,6 +425,9 @@ void TogglePinnedThread(
 			MTP_bool(isPinned)
 		)).done([=](const MTPUpdates &result) {
 			owner->session().api().applyUpdates(result);
+			if (onToggled) {
+				onToggled();
+			}
 		}).send();
 	} else if (const auto sublist = entry->asSublist()) {
 		const auto flags = isPinned
@@ -431,6 +438,9 @@ void TogglePinnedThread(
 			MTP_inputDialogPeer(sublist->peer()->input)
 		)).done([=] {
 			owner->notifyPinnedDialogsOrderUpdated();
+			if (onToggled) {
+				onToggled();
+			}
 		}).send();
 		//if (isPinned) {
 		//	controller->content()->dialogsToUp();
@@ -499,7 +509,7 @@ void Filler::addTogglePin() {
 	const auto weak = base::make_weak(entry);
 	const auto pinToggle = [=] {
 		if (const auto strong = weak.get()) {
-			TogglePinnedThread(controller, strong, filterId);
+			TogglePinnedThread(controller, strong, filterId, nullptr);
 		}
 	};
 	_addAction(
@@ -575,7 +585,7 @@ void Filler::addStoryArchive() {
 	const auto controller = _controller;
 	const auto weak = base::make_weak(_thread);
 	_addAction(tr::lng_stories_archive_button(tr::now), [=] {
-		if (const auto strong = weak.get()) {
+		if ([[maybe_unused]] const auto strong = weak.get()) {
 			controller->showSection(Info::Stories::Make(
 				channel,
 				Info::Stories::Tab::Archive));
@@ -684,12 +694,8 @@ void Filler::addToggleArchive() {
 	}
 	const auto peer = _peer;
 	const auto history = _request.key.history();
-	if (history && history->useTopPromotion()) {
+	if (!CanArchive(history, peer)) {
 		return;
-	} else if (peer->isNotificationsUser() || peer->isSelf()) {
-		if (!history || !history->folder()) {
-			return;
-		}
 	}
 	const auto isArchived = [=] {
 		return IsArchived(history);
@@ -785,7 +791,7 @@ void Filler::addBlockUser() {
 		|| user->isVerifyCodes()) {
 		return;
 	}
-	const auto window = &_controller->window();
+	const auto window = _controller;
 	const auto blockText = [](not_null<UserData*> user) {
 		return user->isBlocked()
 			? ((user->isBot() && !user->isSupport())
@@ -797,14 +803,16 @@ void Filler::addBlockUser() {
 	};
 	const auto blockAction = _addAction(blockText(user), [=] {
 		const auto show = window->uiShow();
-		if (user->isBlocked()) {
+		if (show->showFrozenError()) {
+			return;
+		} else if (user->isBlocked()) {
 			PeerMenuUnblockUserWithBotRestart(show, user);
 		} else if (user->isBot()) {
 			user->session().api().blockedPeers().block(user);
 		} else {
 			window->show(Box(
 				PeerMenuBlockUserBox,
-				window,
+				&window->window(),
 				user,
 				v::null,
 				v::null));
@@ -852,9 +860,10 @@ void Filler::addExportChat() {
 		return;
 	}
 	const auto peer = _peer;
+	const auto navigation = _controller;
 	_addAction(
 		tr::lng_profile_export_chat(tr::now),
-		[=] { PeerMenuExportChat(peer); },
+		[=] { PeerMenuExportChat(navigation, peer); },
 		&st::menuIconExport);
 }
 
@@ -900,9 +909,15 @@ void Filler::addNewContact() {
 		return;
 	}
 	const auto controller = _controller;
+	const auto edit = [=] {
+		if (controller->showFrozenError()) {
+			return;
+		}
+		controller->show(Box(EditContactBox, controller, user));
+	};
 	_addAction(
 		tr::lng_info_add_as_contact(tr::now),
-		[=] { controller->show(Box(EditContactBox, controller, user)); },
+		edit,
 		&st::menuIconInvite);
 }
 
@@ -924,9 +939,15 @@ void Filler::addEditContact() {
 		return;
 	}
 	const auto controller = _controller;
+	const auto edit = [=] {
+		if (controller->showFrozenError()) {
+			return;
+		}
+		controller->show(Box(EditContactBox, controller, user));
+	};
 	_addAction(
 		tr::lng_info_edit_contact(tr::now),
-		[=] { controller->show(Box(EditContactBox, controller, user)); },
+		edit,
 		&st::menuIconEdit);
 }
 
@@ -1075,7 +1096,7 @@ void Filler::addViewStatistics() {
 			= (channel->flags() & Flag::CanViewCreditsRevenue);
 		if (canGetStats) {
 			_addAction(tr::lng_stats_title(tr::now), [=] {
-				if (const auto strong = weak.get()) {
+				if ([[maybe_unused]] const auto strong = weak.get()) {
 					using namespace Info;
 					controller->showSection(Statistics::Make(peer, {}, {}));
 				}
@@ -1085,14 +1106,14 @@ void Filler::addViewStatistics() {
 			|| channel->amCreator()
 			|| channel->canPostStories()) {
 			_addAction(tr::lng_boosts_title(tr::now), [=] {
-				if (const auto strong = weak.get()) {
+				if ([[maybe_unused]] const auto strong = weak.get()) {
 					controller->showSection(Info::Boosts::Make(peer));
 				}
 			}, &st::menuIconBoosts);
 		}
 		if (canViewEarn || canViewCreditsEarn) {
 			_addAction(tr::lng_channel_earn_title(tr::now), [=] {
-				if (const auto strong = weak.get()) {
+				if ([[maybe_unused]] const auto strong = weak.get()) {
 					controller->showSection(Info::ChannelEarn::Make(peer));
 				}
 			}, &st::menuIconEarn);
@@ -1165,6 +1186,9 @@ void Filler::addCreatePoll() {
 }
 
 void Filler::addThemeEdit() {
+	if (_peer->isVerifyCodes()) {
+		return;
+	}
 	const auto user = _peer->asUser();
 	if (!user || user->isInaccessible()) {
 		return;
@@ -1520,7 +1544,9 @@ void Filler::fillSavedSublistActions() {
 
 } // namespace
 
-void PeerMenuExportChat(not_null<PeerData*> peer) {
+void PeerMenuExportChat(
+		not_null<Window::SessionController*> controller,
+		not_null<PeerData*> peer) {
 	base::call_delayed(st::defaultPopupMenu.showDuration, [=] {
 		Core::App().exportManager().start(peer);
 	});
@@ -1529,6 +1555,9 @@ void PeerMenuExportChat(not_null<PeerData*> peer) {
 void PeerMenuDeleteContact(
 		not_null<Window::SessionController*> controller,
 		not_null<UserData*> user) {
+	if (controller->showFrozenError()) {
+		return;
+	}
 	const auto text = tr::lng_sure_delete_contact(
 		tr::now,
 		lt_contact,
@@ -1625,6 +1654,9 @@ void PeerMenuDeleteTopic(
 void PeerMenuShareContactBox(
 		not_null<Window::SessionNavigation*> navigation,
 		not_null<UserData*> user) {
+	if (navigation->showFrozenError()) {
+		return;
+	}
 	// There is no async to make weak from controller.
 	const auto weak = std::make_shared<QPointer<Ui::BoxContent>>();
 	auto callback = [=](not_null<Data::Thread*> thread) {
@@ -3130,14 +3162,20 @@ Fn<void()> ClearHistoryHandler(
 		not_null<Window::SessionController*> controller,
 		not_null<PeerData*> peer) {
 	return [=] {
-		controller->show(Box<DeleteMessagesBox>(peer, true));
+		if (!controller->showFrozenError()) {
+			controller->show(Box<DeleteMessagesBox>(peer, true));
+		}
 	};
 }
 
 Fn<void()> DeleteAndLeaveHandler(
 		not_null<Window::SessionController*> controller,
 		not_null<PeerData*> peer) {
-	return [=] { controller->show(Box(DeleteChatBox, peer)); };
+	return [=] {
+		if (!controller->showFrozenError()) {
+			controller->show(Box(DeleteChatBox, peer));
+		}
+	};
 }
 
 void FillDialogsEntryMenu(
@@ -3285,9 +3323,10 @@ void AddSeparatorAndShiftUp(const PeerMenuCallback &addAction) {
 void TogglePinnedThread(
 		not_null<Window::SessionController*> controller,
 		not_null<Dialogs::Entry*> entry,
-		FilterId filterId) {
+		FilterId filterId,
+		Fn<void()> onToggled) {
 	if (!filterId) {
-		return TogglePinnedThread(controller, entry);
+		return TogglePinnedThread(controller, entry, onToggled);
 	}
 	const auto history = entry->asHistory();
 	if (!history) {
@@ -3313,11 +3352,25 @@ void TogglePinnedThread(
 	Api::SaveNewFilterPinned(&owner->session(), filterId);
 	if (isPinned) {
 		controller->content()->dialogsToUp();
+		if (onToggled) {
+			onToggled();
+		}
 	}
 }
 
 bool IsArchived(not_null<History*> history) {
 	return (history->folder() != nullptr);
+}
+
+bool CanArchive(History *history, PeerData *peer) {
+	if (history && history->useTopPromotion()) {
+		return false;
+	} else if (peer && (peer->isNotificationsUser() || peer->isSelf())) {
+		if (!history || !history->folder()) {
+			return false;
+		}
+	}
+	return true;
 }
 
 } // namespace Window
