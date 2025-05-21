@@ -91,6 +91,11 @@ extern base::options::toggle OptionGNotification;
 
 class Manager;
 
+struct ActivateOptions {
+	TextWithTags draft;
+	bool allowNewWindow = false;
+};
+
 class System final {
 public:
 	System();
@@ -283,7 +288,7 @@ public:
 
 	void notificationActivated(
 		NotificationId id,
-		const TextWithTags &draft = {});
+		ActivateOptions &&options = {});
 	void notificationReplied(NotificationId id, const TextWithTags &reply);
 
 	struct DisplayOptions {
@@ -353,9 +358,10 @@ protected:
 	[[nodiscard]] virtual QString accountNameSeparator();
 
 private:
-	void openNotificationMessage(
+	Window::SessionController *openNotificationMessage(
 		not_null<History*> history,
-		MsgId messageId);
+		MsgId messageId,
+		bool openSeparated);
 
 	const not_null<System*> _system;
 

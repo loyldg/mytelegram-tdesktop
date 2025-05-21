@@ -85,7 +85,6 @@ namespace Data {
 namespace {
 
 using ViewElement = HistoryView::Element;
-using UserIds = std::vector<UserId>;
 
 // s: box 100x100
 // m: box 320x320
@@ -967,7 +966,8 @@ not_null<PeerData*> Session::processChat(const MTPChat &data) {
 			| Flag::Forum
 			| ((!minimal && !data.is_stories_hidden_min())
 				? Flag::StoriesHidden
-				: Flag());
+				: Flag())
+			| Flag::AutoTranslation;
 		const auto storiesState = minimal
 			? std::optional<Data::Stories::PeerSourceState>()
 			: data.is_stories_unavailable()
@@ -1006,7 +1006,8 @@ not_null<PeerData*> Session::processChat(const MTPChat &data) {
 				&& !data.is_stories_hidden_min()
 				&& data.is_stories_hidden())
 				? Flag::StoriesHidden
-				: Flag());
+				: Flag())
+			| (data.is_autotranslation() ? Flag::AutoTranslation : Flag());
 		channel->setFlags((channel->flags() & ~flagsMask) | flagsSet);
 		channel->setBotVerifyDetailsIcon(
 			data.vbot_verification_icon().value_or_empty());
@@ -4805,36 +4806,6 @@ MessageIdsList Session::takeMimeForwardIds() {
 	return std::move(_mimeForwardIds);
 }
 
-void Session::setTopPromoted(
-		History *promoted,
-		const QString &type,
-		const QString &message) {
-	const auto changed = (_topPromoted != promoted);
-	if (!changed
-		&& (!promoted || promoted->topPromotionMessage() == message)) {
-		return;
-	}
-	if (changed) {
-		if (_topPromoted) {
-			_topPromoted->cacheTopPromotion(false, QString(), QString());
-		}
-	}
-	const auto old = std::exchange(_topPromoted, promoted);
-	if (_topPromoted) {
-		histories().requestDialogEntry(_topPromoted);
-		_topPromoted->cacheTopPromotion(true, type, message);
-		_topPromoted->requestChatListMessage();
-		session().changes().historyUpdated(
-			_topPromoted,
-			HistoryUpdate::Flag::TopPromoted);
-	}
-	if (changed && old) {
-		session().changes().historyUpdated(
-			old,
-			HistoryUpdate::Flag::TopPromoted);
-	}
-}
-
 bool Session::updateWallpapers(const MTPaccount_WallPapers &data) {
 	return data.match([&](const MTPDaccount_wallPapers &data) {
 		setWallpapers(data.vwallpapers().v, data.vhash().v);
@@ -4984,71 +4955,6 @@ void Session::clearLocalStorage() {
 	_cache->clear();
 	_bigFileCache->close();
 	_bigFileCache->clear();
-}
-
-rpl::producer<UserIds> Session::contactBirthdays(bool force) {
-	if ((_contactBirthdaysLastDayRequest != -1)
-		&& (_contactBirthdaysLastDayRequest == QDate::currentDate().day())
-		&& !force) {
-		return rpl::single(_contactBirthdays);
-	}
-	if (_contactBirthdaysRequestId) {
-		_session->api().request(_contactBirthdaysRequestId).cancel();
-	}
-	return [=](auto consumer) {
-		auto lifetime = rpl::lifetime();
-
-		_contactBirthdaysRequestId = _session->api().request(
-			MTPcontacts_GetBirthdays()
-		).done([=](const MTPcontacts_ContactBirthdays &result) {
-			_contactBirthdaysRequestId = 0;
-			_contactBirthdaysLastDayRequest = QDate::currentDate().day();
-			auto users = UserIds();
-			auto today = UserIds();
-			Session::processUsers(result.data().vusers());
-			for (const auto &tlContact : result.data().vcontacts().v) {
-				const auto peerId = tlContact.data().vcontact_id().v;
-				if (const auto user = Session::user(peerId)) {
-					const auto &data = tlContact.data().vbirthday().data();
-					user->setBirthday(Data::Birthday(
-						data.vday().v,
-						data.vmonth().v,
-						data.vyear().value_or_empty()));
-					if (Data::IsBirthdayToday(user->birthday())) {
-						today.push_back(peerToUser(user->id));
-					}
-					users.push_back(peerToUser(user->id));
-				}
-			}
-			_contactBirthdays = std::move(users);
-			_contactBirthdaysToday = std::move(today);
-			consumer.put_next_copy(_contactBirthdays);
-		}).fail([=](const MTP::Error &error) {
-			_contactBirthdaysRequestId = 0;
-			_contactBirthdaysLastDayRequest = QDate::currentDate().day();
-			_contactBirthdays = {};
-			_contactBirthdaysToday = {};
-			consumer.put_next({});
-		}).send();
-
-		return lifetime;
-	};
-}
-
-std::optional<UserIds> Session::knownContactBirthdays() const {
-	if ((_contactBirthdaysLastDayRequest == -1)
-		|| (_contactBirthdaysLastDayRequest != QDate::currentDate().day())) {
-		return std::nullopt;
-	}
-	return _contactBirthdays;
-}
-
-std::optional<UserIds> Session::knownBirthdaysToday() const {
-	if ((_contactBirthdaysLastDayRequest == -1)
-		|| (_contactBirthdaysLastDayRequest != QDate::currentDate().day())) {
-		return std::nullopt;
-	}
-	return _contactBirthdaysToday;
 }
 
 } // namespace Data
