@@ -871,6 +871,10 @@ historyGiftToChannel: IconButton(defaultIconButton) {
 	rippleAreaSize: 40px;
 	ripple: universalRippleAnimation;
 }
+historyDirectMessage: IconButton(historyGiftToChannel) {
+	icon: icon{{ "menu/chat_discuss", windowActiveTextFg }};
+	iconOver: icon{{ "menu/chat_discuss", windowActiveTextFg }};
+}
 historyUnblock: FlatButton(historyComposeButton) {
 	color: attentionButtonFg;
 	overColor: attentionButtonFgOver;
@@ -1594,3 +1598,5 @@ frozenInfoBox: Box(defaultBox) {
 	}
 	shadowIgnoreTopSkip: true;
 }
+
+roundVideoFont: font(14px semibold);
