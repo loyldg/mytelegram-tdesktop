@@ -306,7 +306,7 @@ ChatWidget::ChatWidget(
 	_topBar->show();
 
 	if (_repliesRootView) {
-		_repliesRootView->move(0, _topBar->height());
+		_repliesRootView->move(0, 0);
 	}
 
 	_topBar->deleteSelectionRequest(
@@ -1590,6 +1590,9 @@ void ChatWidget::validateSubsectionTabs() {
 		updateControlsGeometry();
 		orderWidgets();
 	}, _subsectionTabsLifetime);
+	_inner->overrideChatMode((_subsectionTabs->leftSkip() > 0)
+		? ElementChatMode::Narrow
+		: std::optional<ElementChatMode>());
 	updateControlsGeometry();
 	orderWidgets();
 }
@@ -2975,9 +2978,6 @@ rpl::producer<Data::MessagesSlice> ChatWidget::sublistSource(
 		Data::MessagePosition aroundId,
 		int limitBefore,
 		int limitAfter) {
-	const auto messageId = aroundId.fullId.msg
-		? aroundId.fullId.msg
-		: (ServerMaxMsgId - 1);
 	return _sublist->source(
 		aroundId,
 		limitBefore,

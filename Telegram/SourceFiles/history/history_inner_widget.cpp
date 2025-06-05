@@ -810,7 +810,7 @@ bool HistoryInner::canHaveFromUserpics() const {
 	} else if (const auto channel = _peer->asBroadcast()) {
 		return channel->signatureProfiles();
 	}
-	return !_removeFromUserpics;
+	return _isChatWide || !_removeFromUserpics;
 }
 
 void HistoryInner::toggleRemoveFromUserpics(bool remove) {
@@ -3103,7 +3103,10 @@ void HistoryInner::showContextMenu(QContextMenuEvent *e, bool showFromTouch) {
 			leaderOrSelf,
 			_controller);
 	} else if (leaderOrSelf) {
-		HistoryView::MaybeAddWhenEditedForwardedAction(_menu, leaderOrSelf);
+		HistoryView::MaybeAddWhenEditedForwardedAction(
+			_menu,
+			leaderOrSelf,
+			_controller);
 	}
 
 	if (_menu->empty()) {
@@ -4541,6 +4544,10 @@ void HistoryInner::refreshAboutView(bool force) {
 			} else {
 				session().api().requestFullPeer(user);
 			}
+		}
+	} else if (const auto monoforum = _peer->asChannel()) {
+		if (monoforum->isMonoforum() && !monoforum->amMonoforumAdmin()) {
+			refresh();
 		}
 	}
 }

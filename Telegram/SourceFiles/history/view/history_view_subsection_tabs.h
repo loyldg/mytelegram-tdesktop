@@ -16,6 +16,10 @@ namespace Data {
 class Thread;
 } // namespace Data
 
+namespace Main {
+class Session;
+} // namespace Main
+
 namespace Window {
 class SessionController;
 } // namespace Window
@@ -36,6 +40,8 @@ public:
 		not_null<Ui::RpWidget*> parent,
 		not_null<Data::Thread*> thread);
 	~SubsectionTabs();
+
+	[[nodiscard]] Main::Session &session();
 
 	[[nodiscard]] bool switchTo(
 		not_null<Data::Thread*> thread,
@@ -63,10 +69,10 @@ private:
 		DocumentId iconId = 0;
 		QString name;
 
-		friend inline constexpr auto operator<=>(
+		friend inline auto operator<=>(
 			const Item &,
 			const Item &) = default;
-		friend inline constexpr bool operator==(
+		friend inline bool operator==(
 			const Item &,
 			const Item &) = default;
 	};
@@ -79,6 +85,7 @@ private:
 	void refreshSlice();
 	void scheduleRefresh();
 	void loadMore();
+	void setup(not_null<Ui::RpWidget*> parent);
 	[[nodiscard]] rpl::producer<> dataChanged() const;
 
 	void setupSlider(

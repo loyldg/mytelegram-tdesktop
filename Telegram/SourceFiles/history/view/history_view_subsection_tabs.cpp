@@ -21,6 +21,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/history.h"
 #include "lang/lang_keys.h"
 #include "main/main_session.h"
+#include "main/main_session_settings.h"
 #include "ui/controls/subsection_tabs_slider.h"
 #include "ui/effects/ripple_animation.h"
 #include "ui/widgets/menu/menu_add_action_callback_factory.h"
@@ -40,7 +41,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace HistoryView {
 namespace {
 
-constexpr auto kDefaultLimit = 5; AssertIsDebug()// 10;
+constexpr auto kDefaultLimit = 12;
 
 } // namespace
 
@@ -56,7 +57,7 @@ SubsectionTabs::SubsectionTabs(
 , _afterLimit(kDefaultLimit) {
 	track();
 	refreshSlice();
-	setupHorizontal(parent);
+	setup(parent);
 
 	dataChanged() | rpl::start_with_next([=] {
 		if (_loading) {
@@ -70,6 +71,15 @@ SubsectionTabs::~SubsectionTabs() {
 	delete base::take(_horizontal);
 	delete base::take(_vertical);
 	delete base::take(_shadow);
+}
+
+void SubsectionTabs::setup(not_null<Ui::RpWidget*> parent) {
+	const auto peerId = _history->peer->id;
+	if (session().settings().verticalSubsectionTabs(peerId)) {
+		setupVertical(parent);
+	} else {
+		setupHorizontal(parent);
+	}
 }
 
 void SubsectionTabs::setupHorizontal(not_null<QWidget*> parent) {
@@ -97,9 +107,17 @@ void SubsectionTabs::setupHorizontal(not_null<QWidget*> parent) {
 		st::chatTabsScroll,
 		true);
 	scroll->show();
+	const auto shadow = Ui::CreateChild<Ui::PlainShadow>(_horizontal);
 	const auto slider = scroll->setOwnedWidget(
 		object_ptr<Ui::HorizontalSlider>(scroll));
 	setupSlider(scroll, slider, false);
+
+	shadow->showOn(rpl::single(
+		rpl::empty
+	) | rpl::then(
+		scroll->scrolls()
+	) | rpl::map([=] { return scroll->scrollLeft() > 0; }));
+	shadow->setAttribute(Qt::WA_TransparentForMouseEvents);
 
 	_horizontal->resize(
 		_horizontal->width(),
@@ -121,6 +139,7 @@ void SubsectionTabs::setupHorizontal(not_null<QWidget*> parent) {
 		const auto togglew = toggle->width();
 		const auto height = size.height();
 		scroll->setGeometry(togglew, 0, size.width() - togglew, height);
+		shadow->setGeometry(togglew, 0, st::lineWidth, height);
 	}, scroll->lifetime());
 
 	_horizontal->paintRequest() | rpl::start_with_next([=](QRect clip) {
@@ -156,10 +175,17 @@ void SubsectionTabs::setupVertical(not_null<QWidget*> parent) {
 		_vertical,
 		st::chatTabsScroll);
 	scroll->show();
-
+	const auto shadow = Ui::CreateChild<Ui::PlainShadow>(_vertical);
 	const auto slider = scroll->setOwnedWidget(
 		object_ptr<Ui::VerticalSlider>(scroll));
 	setupSlider(scroll, slider, true);
+
+	shadow->showOn(rpl::single(
+		rpl::empty
+	) | rpl::then(
+		scroll->scrolls()
+	) | rpl::map([=] { return scroll->scrollTop() > 0; }));
+	shadow->setAttribute(Qt::WA_TransparentForMouseEvents);
 
 	_vertical->resize(
 		std::max(toggle->width(), slider->width()),
@@ -170,6 +196,7 @@ void SubsectionTabs::setupVertical(not_null<QWidget*> parent) {
 		const auto toggleh = toggle->height();
 		const auto width = size.width();
 		scroll->setGeometry(0, toggleh, width, size.height() - toggleh);
+		shadow->setGeometry(0, toggleh, width, st::lineWidth);
 	}, scroll->lifetime());
 
 	_vertical->paintRequest() | rpl::start_with_next([=](QRect clip) {
@@ -214,18 +241,40 @@ void SubsectionTabs::setupSlider(
 			: scroll->scrollLeftMax();
 		const auto availableFrom = scrollValue;
 		const auto availableTill = (scrollMax - scrollValue);
-		if (scrollMax <= 2 * full && _afterAvailable > 0) {
+		if (scrollMax <= 3 * full && _afterAvailable > 0) {
 			_beforeLimit *= 2;
 			_afterLimit *= 2;
 		}
+		const auto findMiddle = [&] {
+			Expects(!_slice.empty());
+
+			auto best = -1;
+			auto bestDistance = -1;
+			const auto ideal = scrollValue + (full / 2);
+			for (auto i = 0, count = int(_slice.size()); i != count; ++i) {
+				const auto a = slider->lookupSectionPosition(i);
+				const auto b = (i + 1 == count)
+					? (full + scrollMax)
+					: slider->lookupSectionPosition(i + 1);
+				const auto middle = (a + b) / 2;
+				const auto distance = std::abs(middle - ideal);
+				if (best < 0 || distance < bestDistance) {
+					best = i;
+					bestDistance = distance;
+				}
+			}
+
+			Ensures(best >= 0);
+			return best;
+		};
 		if (availableFrom < full
 			&& _beforeSkipped.value_or(0) > 0
 			&& !_slice.empty()) {
-			_around = _slice.front().thread;
+			_around = _slice[findMiddle()].thread;
 			refreshSlice();
 		} else if (availableTill < full) {
 			if (_afterAvailable > 0) {
-				_around = _slice.back().thread;
+				_around = _slice[findMiddle()].thread;
 				refreshSlice();
 			} else if (!_afterSkipped.has_value()) {
 				_loading = true;
@@ -233,6 +282,12 @@ void SubsectionTabs::setupSlider(
 			}
 		}
 	}, scroll->lifetime());
+
+	using ImagePointer = std::shared_ptr<Ui::DynamicImage>;
+	struct Cache {
+		base::flat_map<not_null<PeerData*>, ImagePointer> userpics;
+	};
+	const auto cache = std::make_shared<Cache>();
 
 	_refreshed.events_starting_with_copy(
 		rpl::empty
@@ -242,6 +297,7 @@ void SubsectionTabs::setupSlider(
 			return _controller->isGifPausedAtLeastFor(
 				Window::GifPauseReason::Any);
 		};
+		auto updated = Cache();
 		auto sections = std::vector<Ui::SubsectionTab>();
 		auto activeIndex = -1;
 		for (const auto &item : _slice) {
@@ -288,9 +344,13 @@ void SubsectionTabs::setupSlider(
 			} else if (const auto sublist = item.thread->asSublist()) {
 				const auto peer = sublist->sublistPeer();
 				if (vertical) {
+					auto was = cache->userpics[peer];
+					auto userpic = updated.userpics[peer] = was
+						? was
+						: Ui::MakeUserpicThumbnail(peer);
 					sections.push_back({
-						.text = peer->shortName(),
-						.userpic = Ui::MakeUserpicThumbnail(peer),
+						.text = { peer->shortName() },
+						.userpic = std::move(userpic),
 					});
 				} else {
 					sections.push_back({
@@ -303,13 +363,14 @@ void SubsectionTabs::setupSlider(
 				}
 			} else {
 				sections.push_back({
-					.text = tr::lng_filters_all_short(tr::now),
+					.text = { tr::lng_filters_all_short(tr::now) },
 					.userpic = Ui::MakeAllSubsectionsThumbnail(textFg),
 				});
 			}
 			auto &section = sections.back();
 			section.badges = item.badges;
 		}
+		*cache = std::move(updated);
 
 		auto scrollSavingThread = (Data::Thread*)nullptr;
 		auto scrollSavingShift = 0;
@@ -341,11 +402,15 @@ void SubsectionTabs::setupSlider(
 				scrollSavingIndex = -1;
 				for (auto index = 0; index != count; ++index) {
 					const auto thread = _sectionsSlice[index].thread;
-					if (ranges::contains(_slice, thread, &Item::thread)) {
+					const auto i = ranges::find(
+						_slice,
+						thread,
+						&Item::thread);
+					if (i != end(_slice)) {
 						scrollSavingThread = thread;
 						scrollSavingShift = scrollValue
 							- slider->lookupSectionPosition(index);
-						scrollSavingIndex = index;
+						scrollSavingIndex = int(i - begin(_slice));
 						break;
 					}
 				}
@@ -354,7 +419,7 @@ void SubsectionTabs::setupSlider(
 		slider->setSections({
 			.tabs = std::move(sections),
 			.context = Core::TextContext({
-				.session = &_history->session(),
+				.session = &session(),
 			}),
 		}, paused);
 		slider->setActiveSectionFast(activeIndex);
@@ -423,6 +488,11 @@ void SubsectionTabs::toggleModes() {
 	} else {
 		setupHorizontal(_vertical->parentWidget());
 	}
+	const auto peerId = _history->peer->id;
+	const auto vertical = (_vertical != nullptr);
+	session().settings().setVerticalSubsectionTabs(peerId, vertical);
+	session().saveSettingsDelayed();
+
 	_layoutRequests.fire({});
 }
 
@@ -592,7 +662,7 @@ void SubsectionTabs::refreshSlice() {
 	const auto push = [&](not_null<Data::Thread*> thread) {
 		const auto topic = thread->asTopic();
 		const auto sublist = thread->asSublist();
-		const auto badges = [&] {
+		auto badges = [&] {
 			if (!topic && !sublist) {
 				return Dialogs::BadgesState();
 			} else if (thread->chatListUnreadState().known) {
@@ -607,6 +677,10 @@ void SubsectionTabs::refreshSlice() {
 			}
 			return thread->chatListBadgesState();
 		}();
+		if (topic) {
+			// Don't show the small indicators for non-visited unread topics.
+			badges.unread = false;
+		}
 		slice.push_back({
 			.thread = thread,
 			.badges = badges,
@@ -654,6 +728,10 @@ void SubsectionTabs::scheduleRefresh() {
 			refreshSlice();
 		}
 	});
+}
+
+Main::Session &SubsectionTabs::session() {
+	return _history->session();
 }
 
 bool SubsectionTabs::switchTo(
