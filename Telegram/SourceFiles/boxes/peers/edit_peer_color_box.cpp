@@ -574,15 +574,15 @@ void Set(
 			MTP_flags(Flag::f_color | Flag::f_background_emoji_id),
 			MTP_int(values.colorIndex),
 			MTP_long(values.backgroundEmojiId)));
-	} else if (peer->isMegagroup()) {
 	} else if (const auto channel = peer->asChannel()) {
-		using Flag = MTPchannels_UpdateColor::Flag;
-		send(MTPchannels_UpdateColor(
-			MTP_flags(Flag::f_color | Flag::f_background_emoji_id),
-			channel->inputChannel,
-			MTP_int(values.colorIndex),
-			MTP_long(values.backgroundEmojiId)));
-
+		if (peer->isBroadcast()) {
+			using Flag = MTPchannels_UpdateColor::Flag;
+			send(MTPchannels_UpdateColor(
+				MTP_flags(Flag::f_color | Flag::f_background_emoji_id),
+				channel->inputChannel,
+				MTP_int(values.colorIndex),
+				MTP_long(values.backgroundEmojiId)));
+		}
 		if (values.statusChanged
 			&& (values.statusId || peer->emojiStatusId())) {
 			peer->owner().emojiStatuses().set(
@@ -1482,7 +1482,11 @@ void CheckBoostLevel(
 		show->show(Box(Ui::AskBoostBox, Ui::AskBoostBoxData{
 			.link = qs(data.vboost_url()),
 			.boost = counters,
+			.features = (peer->isChannel()
+				? LookupBoostFeatures(peer->asChannel())
+				: Ui::BoostFeatures()),
 			.reason = *reason,
+			.group = !peer->isBroadcast(),
 		}, openStatistics, nullptr));
 		cancel();
 	}).fail([=](const MTP::Error &error) {

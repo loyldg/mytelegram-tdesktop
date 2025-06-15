@@ -847,6 +847,7 @@ bool OpenMediaTimestamp(
 				document,
 				context,
 				context ? context->topicRootId() : MsgId(0),
+				context ? context->sublistPeerId() : PeerId(0),
 				false,
 				time));
 		} else if (document->isSong() || document->isVoiceMessage()) {
@@ -1920,7 +1921,7 @@ void ResolveAndShowUniqueGift(
 		session->data().processUsers(data.vusers());
 		if (const auto gift = Api::FromTL(session, data.vgift())) {
 			using namespace ::Settings;
-			show->show(Box(GlobalStarGiftBox, show, *gift, st));
+			show->show(Box(GlobalStarGiftBox, show, *gift, PeerId(), st));
 		}
 	}).fail([=](const MTP::Error &error) {
 		clear();

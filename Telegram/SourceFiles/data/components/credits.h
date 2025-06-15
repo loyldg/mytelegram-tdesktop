@@ -7,10 +7,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-namespace Api {
-class CreditsStatus;
-} // namespace Api
-
 namespace Main {
 class Session;
 } // namespace Main
@@ -37,6 +33,10 @@ public:
 	[[nodiscard]] rpl::producer<float64> rateValue(
 		not_null<PeerData*> ownedBotOrChannel);
 
+	[[nodiscard]] rpl::producer<> refreshedByPeerId(PeerId peerId);
+
+	[[nodiscard]] bool statsEnabled() const;
+
 	void applyCurrency(PeerId peerId, uint64 balance);
 	[[nodiscard]] uint64 balanceCurrency(PeerId peerId) const;
 
@@ -52,7 +52,7 @@ private:
 
 	const not_null<Main::Session*> _session;
 
-	std::unique_ptr<Api::CreditsStatus> _loader;
+	std::unique_ptr<rpl::lifetime> _loader;
 
 	base::flat_map<PeerId, StarsAmount> _cachedPeerBalances;
 	base::flat_map<PeerId, uint64> _cachedPeerCurrencyBalances;
@@ -63,6 +63,10 @@ private:
 	rpl::event_stream<> _loadedChanges;
 	crl::time _lastLoaded = 0;
 	float64 _rate = 0.;
+
+	bool _statsEnabled = false;
+
+	rpl::event_stream<PeerId> _refreshedByPeerId;
 
 	SingleQueuedInvokation _reload;
 
