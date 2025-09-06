@@ -119,12 +119,10 @@ rpl::producer<Ui::MessageBarContent> RootViewContent(
 ChatMemento::ChatMemento(
 	ChatViewId id,
 	MsgId highlightId,
-	const TextWithEntities &highlightPart,
-	int highlightPartOffsetHint)
+	MessageHighlightId highlight)
 : _id(id)
-, _highlightPart(highlightPart)
-, _highlightPartOffsetHint(highlightPartOffsetHint)
-, _highlightId(highlightId) {
+, _highlightId(highlightId)
+, _highlight(std::move(highlight)) {
 	if (highlightId || _id.sublist) {
 		_list.setAroundPosition({
 			.fullId = FullMsgId(_id.history->peer->id, highlightId),
@@ -458,7 +456,7 @@ ChatWidget::~ChatWidget() {
 	if (_repliesRootId) {
 		controller()->sendingAnimation().clear();
 	}
-	if (_subsectionTabs) {
+	if (_subsectionTabs && !_subsectionTabs->dying()) {
 		_subsectionTabsLifetime.destroy();
 		controller()->saveSubsectionTabs(base::take(_subsectionTabs));
 	}
@@ -812,6 +810,11 @@ void ChatWidget::setupComposeControls() {
 		send(options);
 	}, lifetime());
 
+	_composeControls->scrollToMaxRequests(
+	) | rpl::start_with_next([=] {
+		listScrollTo(_scroll->scrollTopMax());
+	}, lifetime());
+
 	_composeControls->sendVoiceRequests(
 	) | rpl::start_with_next([=](const ComposeControls::VoiceToSend &data) {
 		sendVoice(data);
@@ -876,12 +879,7 @@ void ChatWidget::setupComposeControls() {
 	_composeControls->jumpToItemRequests(
 	) | rpl::start_with_next([=](FullReplyTo to) {
 		if (const auto item = session().data().message(to.messageId)) {
-			JumpToMessageClickHandler(
-				item,
-				{},
-				to.quote,
-				to.quoteOffset
-			)->onClick({});
+			JumpToMessageClickHandler(item, {}, to.highlight())->onClick({});
 		}
 	}, lifetime());
 
@@ -1039,8 +1037,9 @@ void ChatWidget::setupSwipeReplyAndBack() {
 				: still)->fullId();
 			_inner->replyToMessageRequestNotify({
 				.messageId = replyToItemId,
-				.quote = selected.text,
-				.quoteOffset = selected.offset,
+				.quote = selected.highlight.quote,
+				.quoteOffset = selected.highlight.quoteOffset,
+				.todoItemId = selected.highlight.todoItemId,
 			});
 		};
 		return result;
@@ -2321,9 +2320,9 @@ bool ChatWidget::preventsClose(Fn<void()> &&continueCallback) const {
 	} else if (!_newTopicDiscarded
 		&& _topic
 		&& _topic->creating()) {
-		const auto weak = Ui::MakeWeak(this);
+		const auto weak = base::make_weak(this);
 		auto sure = [=](Fn<void()> &&close) {
-			if (const auto strong = weak.data()) {
+			if (const auto strong = weak.get()) {
 				strong->_newTopicDiscarded = true;
 			}
 			close();
@@ -2608,7 +2607,7 @@ void ChatWidget::subscribeToSublist() {
 void ChatWidget::unreadCountUpdated() {
 	if (_sublist && _sublist->unreadMark()) {
 		crl::on_main(this, [=] {
-			const auto guard = Ui::MakeWeak(this);
+			const auto guard = base::make_weak(this);
 			controller()->showPeerHistory(_sublist->owningHistory());
 			if (guard) {
 				closeCurrent();
@@ -2639,8 +2638,7 @@ void ChatWidget::restoreState(not_null<ChatMemento*> memento) {
 		auto params = Window::SectionShow(
 			Window::SectionShow::Way::Forward,
 			anim::type::instant);
-		params.highlightPart = memento->highlightPart();
-		params.highlightPartOffsetHint = memento->highlightPartOffsetHint();
+		params.highlight = memento->highlight();
 		showAtPosition(Data::MessagePosition{
 			.fullId = FullMsgId(_peer->id, highlight),
 			.date = TimeId(0),
@@ -3443,8 +3441,7 @@ bool ChatWidget::searchInChatEmbedded(
 		const auto item = activation.item;
 		auto params = ::Window::SectionShow(
 			::Window::SectionShow::Way::ClearStack);
-		params.highlightPart = { activation.query };
-		params.highlightPartOffsetHint = kSearchQueryOffsetHint;
+		params.highlight = Window::SearchHighlightId(activation.query);
 		controller()->showPeerHistory(
 			item->history()->peer->id,
 			params,

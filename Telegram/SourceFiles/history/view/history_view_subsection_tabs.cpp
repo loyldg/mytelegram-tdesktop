@@ -237,6 +237,12 @@ void SubsectionTabs::setupSlider(
 	slider->requestShown(
 	) | rpl::start_with_next([=](Ui::ScrollToRequest request) {
 		const auto full = vertical ? scroll->height() : scroll->width();
+		const auto tab = request.ymax - request.ymin;
+		if (tab < full) {
+			const auto add = std::min(full - tab, tab) / 2;
+			request.ymax += add;
+			request.ymin -= add;
+		}
 		const auto scrollValue = vertical
 			? scroll->scrollTop()
 			: scroll->scrollLeft();
@@ -432,10 +438,14 @@ void SubsectionTabs::setupSlider(
 				.session = &session(),
 			}),
 		}, paused);
-		slider->setActiveSectionFast(activeIndex);
+
+		const auto ignoreActiveScroll = (scrollSavingIndex >= 0);
+		slider->setActiveSectionFast(activeIndex, ignoreActiveScroll);
 
 		_sectionsSlice = _slice;
-		if (scrollSavingIndex >= 0) {
+		Assert(slider->sectionsCount() == _slice.size());
+		if (ignoreActiveScroll) {
+			Assert(scrollSavingIndex < slider->sectionsCount());
 			const auto position = scrollSavingShift
 				+ slider->lookupSectionPosition(scrollSavingIndex);
 			if (vertical) {
@@ -504,6 +514,10 @@ void SubsectionTabs::toggleModes() {
 	session().saveSettingsDelayed();
 
 	_layoutRequests.fire({});
+}
+
+bool SubsectionTabs::dying() const {
+	return !UsedFor(_history);
 }
 
 rpl::producer<> SubsectionTabs::removeRequests() const {
@@ -702,6 +716,8 @@ void SubsectionTabs::refreshSlice() {
 		if (_slice != slice) {
 			_slice = std::move(slice);
 			_refreshed.fire({});
+			Assert((!_horizontal && !_vertical)
+				|| (_slice.size() == _sectionsSlice.size()));
 		}
 	});
 	const auto push = [&](not_null<Data::Thread*> thread) {
@@ -722,7 +738,7 @@ void SubsectionTabs::refreshSlice() {
 			}
 			return thread->chatListBadgesState();
 		}();
-		if (topic) {
+		if (topic && badges.unreadCounter <= 0) {
 			// Don't show the small indicators for non-visited unread topics.
 			badges.unread = false;
 		}

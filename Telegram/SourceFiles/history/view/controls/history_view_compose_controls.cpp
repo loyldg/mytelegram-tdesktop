@@ -24,6 +24,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "chat_helpers/field_autocomplete.h"
 #include "core/application.h"
 #include "core/core_settings.h"
+#include "core/shortcuts.h"
 #include "core/ui_integration.h"
 #include "data/notify/data_notify_settings.h"
 #include "data/data_changes.h"
@@ -492,10 +493,9 @@ void FieldHeader::setShownMessage(HistoryItem *item) {
 			.customEmojiLoopLimit = 1,
 		});
 		const auto replyTo = _replyTo.current();
-		const auto quote = replyTo && !replyTo.quote.empty();
 		_shownMessageName.setMarkedText(
 			st::fwdTextStyle,
-			HistoryView::Reply::ComposePreviewName(_history, item, quote),
+			HistoryView::Reply::ComposePreviewName(_history, item, replyTo),
 			Ui::NameTextOptions(),
 			context);
 	} else {
@@ -1179,6 +1179,17 @@ auto ComposeControls::sendContentRequests(SendRequestType requestType) const {
 		_send->clicks() | filter | map,
 		_field->submits() | filter | map,
 		_sendCustomRequests.events());
+}
+
+rpl::producer<> ComposeControls::scrollToMaxRequests() const {
+	return _field->submits() | rpl::filter([=]{
+		if (_mode == Mode::Normal
+			&& !_voiceRecordBar->isListenState()
+			&& getTextWithAppliedMarkdown().text.isEmpty()) {
+			return true;
+		}
+		return false;
+	}) | rpl::to_empty;
 }
 
 rpl::producer<Api::SendOptions> ComposeControls::sendRequests() const {
@@ -2594,6 +2605,23 @@ void ComposeControls::initVoiceRecordBar() {
 	) | rpl::start_with_next([=] {
 		updateSendButtonType();
 	}, _wrap->lifetime());
+
+	Shortcuts::Requests(
+	) | rpl::filter([=] {
+		return Ui::AppInFocus();
+	}) | rpl::start_with_next([=](not_null<Shortcuts::Request*> request) {
+		using Command = Shortcuts::Command;
+		const auto isVoice = request->check(Command::RecordVoice, 1);
+		const auto isRound = !isVoice
+			&& request->check(Command::RecordRound, 1);
+		(isVoice || isRound) && request->handle([=] {
+			if (_voiceRecordBar) {
+				_voiceRecordBar->startRecordingAndLock(isRound);
+				return true;
+			}
+			return false;
+		});
+	}, _voiceRecordBar->lifetime());
 }
 
 void ComposeControls::updateWrappingVisibility() {
@@ -3036,7 +3064,7 @@ void ComposeControls::editMessage(not_null<HistoryItem*> item) {
 		_show->showBox(Ui::MakeInformBox(tr::lng_edit_caption_voice()));
 		return;
 	} else if (const auto media = item->media()) {
-		if (const auto todolist = media->todolist()) {
+		if (media->todolist()) {
 			Assert(_regularWindow != nullptr);
 			Window::PeerMenuEditTodoList(_regularWindow, item);
 			return;

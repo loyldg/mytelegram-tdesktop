@@ -78,6 +78,7 @@ struct ContentLayout;
 
 namespace Media::View {
 
+class PlaybackSponsored;
 class GroupThumbs;
 class Pip;
 
@@ -107,15 +108,6 @@ public:
 	void activate();
 
 	void show(OpenRequest request);
-
-	//void leaveToChildEvent(QEvent *e, QWidget *child) override {
-	//	// e -- from enterEvent() of child TWidget
-	//	updateOverState(Over::None);
-	//}
-	//void enterFromChildEvent(QEvent *e, QWidget *child) override {
-	//	// e -- from leaveEvent() of child TWidget
-	//	updateOver(mapFromGlobal(QCursor::pos()));
-	//}
 
 	void activateControls();
 	void close();
@@ -412,6 +404,7 @@ private:
 		const StartStreaming &startStreaming = StartStreaming());
 	void startStreamingPlayer(const StartStreaming &startStreaming);
 	void initStreamingThumbnail();
+	void markStreamedReady();
 	void streamingReady(Streaming::Information &&info);
 	[[nodiscard]] bool createStreamingObjects();
 	void handleStreamingUpdate(Streaming::Update &&update);

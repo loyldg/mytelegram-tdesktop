@@ -68,6 +68,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_changes.h"
 #include "data/data_drafts.h"
 #include "data/data_session.h"
+#include "data/data_todo_list.h"
 #include "data/data_web_page.h"
 #include "data/data_document.h"
 #include "data/data_photo.h"
@@ -114,6 +115,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/view/history_view_pinned_section.h"
 #include "history/view/history_view_pinned_bar.h"
 #include "history/view/history_view_group_call_bar.h"
+#include "history/view/history_view_group_members_widget.h"
 #include "history/view/history_view_item_preview.h"
 #include "history/view/history_view_reply.h"
 #include "history/view/history_view_requests_bar.h"
@@ -121,7 +123,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/view/history_view_subsection_tabs.h"
 #include "history/view/history_view_translate_bar.h"
 #include "history/view/media/history_view_media.h"
-#include "profile/profile_block_group_members.h"
 #include "core/click_handler_types.h"
 #include "chat_helpers/field_autocomplete.h"
 #include "chat_helpers/tabbed_panel.h"
@@ -1023,7 +1024,7 @@ void HistoryWidget::setGeometryWithTopMoved(
 	_topDelta = topDelta;
 	bool willBeResized = (size() != newGeometry.size());
 	if (geometry() != newGeometry) {
-		auto weak = Ui::MakeWeak(this);
+		auto weak = base::make_weak(this);
 		setGeometry(newGeometry);
 		if (!weak) {
 			return;
@@ -1497,12 +1498,21 @@ int HistoryWidget::itemTopForHighlight(
 	const auto heightLeft = (visibleAreaHeight - viewHeight);
 	if (heightLeft >= 0) {
 		return std::max(itemTop - (heightLeft / 2), 0);
-	} else if (const auto sel = itemHighlight(item).range
-		; !sel.empty() && !IsSubGroupSelection(sel)) {
+	} else if (const auto highlight = itemHighlight(item)
+		; (!highlight.range.empty() || highlight.todoItemId)
+			&& !IsSubGroupSelection(highlight.range)) {
+		const auto sel = highlight.range;
 		const auto single = st::messageTextStyle.font->height;
-		const auto begin = HistoryView::FindViewY(view, sel.from) - single;
-		const auto end = HistoryView::FindViewY(view, sel.to, begin + single)
-			+ 2 * single;
+		const auto todoy = sel.empty()
+			? HistoryView::FindViewTaskY(view, highlight.todoItemId)
+			: 0;
+		const auto begin = sel.empty()
+			? (todoy - 4 * single)
+			: HistoryView::FindViewY(view, sel.from) - single;
+		const auto end = sel.empty()
+			? (todoy + 4 * single)
+			: (HistoryView::FindViewY(view, sel.to, begin + single)
+				+ 2 * single);
 		auto result = itemTop;
 		if (end > visibleAreaHeight) {
 			result = std::max(result, itemTop + end - visibleAreaHeight);
@@ -2095,6 +2105,18 @@ void HistoryWidget::setupShortcuts() {
 					std::make_shared<Scheduled>(_history));
 				return true;
 			});
+		if (showRecordButton()) {
+			const auto isVoice = request->check(Command::RecordVoice, 1);
+			const auto isRound = !isVoice
+				&& request->check(Command::RecordRound, 1);
+			(isVoice || isRound) && request->handle([=] {
+				if (_voiceRecordBar) {
+					_voiceRecordBar->startRecordingAndLock(isRound);
+					return true;
+				}
+				return false;
+			});
+		}
 		if (session().supportMode()) {
 			request->check(
 				Command::SupportToggleMuted
@@ -4484,7 +4506,7 @@ void HistoryWidget::saveEditMessage(Api::SendOptions options) {
 		}
 	}
 
-	const auto weak = Ui::MakeWeak(this);
+	const auto weak = base::make_weak(this);
 	const auto history = _history;
 
 	const auto done = [=](mtpRequestId requestId) {
@@ -5177,7 +5199,7 @@ void HistoryWidget::updateOverStates(QPoint pos) {
 }
 
 void HistoryWidget::leaveToChildEvent(QEvent *e, QWidget *child) {
-// e -- from enterEvent() of child TWidget
+// e -- from enterEvent() of child RpWidget
 	if (hasMouseTracking()) {
 		updateOverStates(mapFromGlobal(QCursor::pos()));
 	}
@@ -5357,7 +5379,7 @@ bool HistoryWidget::eventFilter(QObject *obj, QEvent *e) {
 			}
 		}
 	}
-	return TWidget::eventFilter(obj, e);
+	return RpWidget::eventFilter(obj, e);
 }
 
 bool HistoryWidget::floatPlayerHandleWheelEvent(QEvent *e) {
@@ -5593,7 +5615,7 @@ bool HistoryWidget::searchInChatEmbedded(
 	if (!peer || Window::SeparateId(peer) != controller()->windowId()) {
 		return false;
 	} else if (_peer != peer) {
-		const auto weak = Ui::MakeWeak(this);
+		const auto weak = base::make_weak(this);
 		controller()->showPeerHistory(peer);
 		if (!weak) {
 			return false;
@@ -5639,8 +5661,7 @@ void HistoryWidget::switchToSearch(QString query) {
 			const auto item = activation.item;
 			auto params = ::Window::SectionShow(
 				::Window::SectionShow::Way::ClearStack);
-			params.highlightPart = { activation.query };
-			params.highlightPartOffsetHint = kSearchQueryOffsetHint;
+			params.highlight = Window::SearchHighlightId(activation.query);
 			controller()->showPeerHistory(
 				item->history()->peer->id,
 				params,
@@ -5797,11 +5818,7 @@ void HistoryWidget::showMembersDropdown() {
 	if (!_membersDropdown) {
 		_membersDropdown.create(this, st::membersInnerDropdown);
 		_membersDropdown->setOwnedWidget(
-			object_ptr<Profile::GroupMembersWidget>(
-				this,
-				controller(),
-				_peer,
-				st::membersInnerItem));
+			object_ptr<HistoryView::GroupMembersWidget>(this, controller(), _peer));
 		_membersDropdown->resizeToWidth(st::membersInnerWidth);
 
 		_membersDropdown->setMaxHeight(countMembersDropdownHeightMax());
@@ -6742,8 +6759,7 @@ int HistoryWidget::countInitialScrollTop() {
 
 			enqueueMessageHighlight({
 				item,
-				base::take(_showAtMsgParams.highlightPart),
-				base::take(_showAtMsgParams.highlightPartOffsetHint),
+				base::take(_showAtMsgParams.highlight),
 			});
 			const auto result = itemTopForHighlight(view);
 			createUnreadBarIfBelowVisibleArea(result);
@@ -7500,12 +7516,7 @@ void HistoryWidget::editDraftOptions() {
 
 void HistoryWidget::jumpToReply(FullReplyTo to) {
 	if (const auto item = session().data().message(to.messageId)) {
-		JumpToMessageClickHandler(
-			item,
-			{},
-			to.quote,
-			to.quoteOffset
-		)->onClick({});
+		JumpToMessageClickHandler(item, {}, to.highlight())->onClick({});
 	}
 }
 
@@ -8548,7 +8559,7 @@ void HistoryWidget::clearFieldText(
 void HistoryWidget::replyToMessage(FullReplyTo id) {
 	if (const auto item = session().data().message(id.messageId)) {
 		if (CanSendReply(item) && !base::IsCtrlPressed()) {
-			replyToMessage(item, id.quote, id.quoteOffset);
+			replyToMessage(item, id);
 		} else if (item->allowsForward()) {
 			const auto show = controller()->uiShow();
 			HistoryView::Controls::ShowReplyToChatBox(show, id);
@@ -8561,16 +8572,12 @@ void HistoryWidget::replyToMessage(FullReplyTo id) {
 
 void HistoryWidget::replyToMessage(
 		not_null<HistoryItem*> item,
-		TextWithEntities quote,
-		int quoteOffset) {
+		FullReplyTo fields) {
 	if (isJoinChannel()) {
 		return;
 	}
-	_processingReplyTo = {
-		.messageId = item->fullId(),
-		.quote = quote,
-		.quoteOffset = quoteOffset,
-	};
+	fields.messageId = item->fullId();
+	_processingReplyTo = fields;
 	_processingReplyItem = item;
 	processReply();
 }
@@ -8695,7 +8702,7 @@ void HistoryWidget::editMessage(
 		controller()->showToast(tr::lng_edit_caption_voice(tr::now));
 		return;
 	} else if (const auto media = item->media()) {
-		if (const auto todolist = media->todolist()) {
+		if (media->todolist()) {
 			Window::PeerMenuEditTodoList(controller(), item);
 			return;
 		}
@@ -9055,9 +9062,9 @@ void HistoryWidget::forwardSelected() {
 	if (!_list) {
 		return;
 	}
-	const auto weak = Ui::MakeWeak(this);
+	const auto weak = base::make_weak(this);
 	Window::ShowForwardMessagesBox(controller(), getSelectedItems(), [=] {
-		if (const auto strong = weak.data()) {
+		if (const auto strong = weak.get()) {
 			strong->clearSelected();
 		}
 	});
@@ -9231,11 +9238,24 @@ void HistoryWidget::updateReplyEditText(not_null<HistoryItem*> item) {
 		.session = &session(),
 		.repaint = [=] { updateField(); },
 	});
+	const auto text = [&] {
+		const auto media = _replyTo.todoItemId ? item->media() : nullptr;
+		if (const auto todolist = media ? media->todolist() : nullptr) {
+			const auto i = ranges::find(
+				todolist->items,
+				_replyTo.todoItemId,
+				&TodoListItem::id);
+			if (i != end(todolist->items)) {
+				return i->text;
+			}
+		}
+		return (_editMsgId || _replyTo.quote.empty())
+			? item->inReplyText()
+			: _replyTo.quote;
+	}();
 	_replyEditMsgText.setMarkedText(
 		st::defaultTextStyle,
-		((_editMsgId || _replyTo.quote.empty())
-			? item->inReplyText()
-			: _replyTo.quote),
+		text,
 		Ui::DialogTextOptions(),
 		context);
 	if (fieldOrDisabledShown() || isRecording()) {
@@ -9321,10 +9341,9 @@ void HistoryWidget::updateReplyToName() {
 		.customEmojiLoopLimit = 1,
 	});
 	const auto to = _replyEditMsg ? _replyEditMsg : _kbReplyTo;
-	const auto replyToQuote = _replyTo && !_replyTo.quote.empty();
 	_replyToName.setMarkedText(
 		st::fwdTextStyle,
-		HistoryView::Reply::ComposePreviewName(_history, to, replyToQuote),
+		HistoryView::Reply::ComposePreviewName(_history, to, _replyTo),
 		Ui::NameTextOptions(),
 		context);
 }

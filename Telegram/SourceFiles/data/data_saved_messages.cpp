@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "apiwrap.h"
 #include "core/application.h"
+#include "data/components/recent_peers.h"
 #include "data/data_changes.h"
 #include "data/data_channel.h"
 #include "data/data_histories.h"
@@ -94,17 +95,6 @@ void SavedMessages::saveActiveSubsectionThread(not_null<Thread*> thread) {
 
 Thread *SavedMessages::activeSubsectionThread() const {
 	return _activeSubsectionSublist;
-}
-
-Dialogs::UnreadState SavedMessages::unreadStateWithParentMuted() const {
-	auto result = _chatsList.unreadState();
-	if (_owningHistory->muted()) {
-		result.chatsMuted = result.chats;
-		result.marksMuted = result.marks;
-		result.messagesMuted = result.messages;
-		result.reactionsMuted = result.reactions;
-	}
-	return result;
 }
 
 SavedMessages::~SavedMessages() {
@@ -458,8 +448,12 @@ void SavedMessages::applySublistDeleted(not_null<PeerData*> sublistPeer) {
 	if (ranges::contains(_lastSublists, not_null(raw))) {
 		reorderLastSublists();
 	}
+	if (_activeSubsectionSublist == raw) {
+		_activeSubsectionSublist = nullptr;
+	}
 
 	_sublistDestroyed.fire(raw);
+	_owner->session().recentPeers().chatOpenDestroyed(raw);
 	session().changes().sublistUpdated(
 		raw,
 		Data::SublistUpdate::Flag::Destroyed);

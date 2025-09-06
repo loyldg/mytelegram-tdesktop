@@ -46,6 +46,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_channel.h"
 #include "data/data_saved_sublist.h"
 #include "data/data_session.h"
+#include "data/data_todo_list.h"
 #include "data/data_forum.h"
 #include "data/data_forum_topic.h"
 #include "data/data_message_reactions.h"
@@ -98,59 +99,6 @@ Element *MousedElement/* = nullptr*/;
 		}
 	}
 	return session->tryResolveWindow();
-}
-
-[[nodiscard]] TextSelection FindSearchQueryHighlight(
-		const QString &text,
-		const QString &query) {
-	const auto lower = query.toLower();
-	const auto inside = text.toLower();
-	const auto find = [&](QStringView part) {
-		auto skip = 0;
-		if (const auto from = inside.indexOf(part, skip); from >= 0) {
-			if (!from || !inside[from - 1].isLetterOrNumber()) {
-				return int(from);
-			}
-			skip = from + 1;
-		}
-		return -1;
-	};
-	if (const auto from = find(lower); from >= 0) {
-		const auto till = from + query.size();
-		if (till >= inside.size() || !inside[till].isLetterOrNumber()) {
-			return { uint16(from), uint16(till) };
-		}
-	}
-	const auto tillEndOfWord = [&](int from) {
-		for (auto till = from + 1; till != inside.size(); ++till) {
-			if (!inside[till].isLetterOrNumber()) {
-				return TextSelection{ uint16(from), uint16(till) };
-			}
-		}
-		return TextSelection{ uint16(from), uint16(inside.size()) };
-	};
-	const auto words = QStringView(lower).split(
-		QRegularExpression(
-			u"[\\W]"_q,
-			QRegularExpression::UseUnicodePropertiesOption),
-		Qt::SkipEmptyParts);
-	for (const auto &word : words) {
-		const auto length = int(word.size());
-		const auto cut = length / 2;
-		const auto part = word.mid(0, length - cut);
-		const auto offset = find(part);
-		if (offset < 0) {
-			continue;
-		}
-		for (auto i = 0; i != cut; ++i) {
-			const auto part = word.mid(0, length - i);
-			if (const auto from = find(part); from >= 0) {
-				return tillEndOfWord(from);
-			}
-		}
-		return tillEndOfWord(offset);
-	}
-	return {};
 }
 
 [[nodiscard]] TextSelection ApplyModificationsFrom(
@@ -479,20 +427,37 @@ void DateBadge::paint(
 	ServiceMessagePainter::PaintDate(p, st, text, width, y, w, chatWide);
 }
 
-void MonoforumSenderBar::init(
+void ForumThreadBar::init(
 		not_null<PeerData*> parentChat,
-		not_null<PeerData*> peer) {
-	sender = peer;
-	text.setText(st::semiboldTextStyle, peer->name());
+		not_null<Data::Thread*> thread) {
+	this->thread = thread;
+	const auto sublist = thread->asSublist();
+	if (sublist) {
+		text.setText(st::semiboldTextStyle, sublist->sublistPeer()->name());
+	} else if (const auto topic = thread->asTopic()) {
+		text.setMarkedText(
+			st::semiboldTextStyle,
+			topic->titleWithIconOrLogo(),
+			kMarkupTextOptions,
+			Core::TextContext({ .session = &topic->session() }));
+	}
 	const auto skip = st::monoforumBarUserpicSkip;
-	const auto userpic = st::msgServicePadding.top()
-		+ st::msgServiceFont->height
-		+ st::msgServicePadding.bottom()
-		- 2 * skip;
-	width = skip + userpic + skip * 2 + text.maxWidth() + st::msgServicePadding.right();
+	const auto userpic = sublist
+		? (st::msgServicePadding.top()
+			+ st::msgServiceFont->height
+			+ st::msgServicePadding.bottom()
+			- 2 * skip)
+		: (st::msgServicePadding.left() - 3 * skip);
+
+	width = skip
+		+ userpic
+		+ skip * 2
+		+ text.maxWidth()
+		+ st::topicButtonArrowSkip
+		+ st::msgServicePadding.right();
 }
 
-int MonoforumSenderBar::height() const {
+int ForumThreadBar::height() const {
 	return st::msgServiceMargin.top()
 		+ st::msgServicePadding.top()
 		+ st::msgServiceFont->height
@@ -500,17 +465,29 @@ int MonoforumSenderBar::height() const {
 		+ st::msgServiceMargin.bottom();
 }
 
-void MonoforumSenderBar::paint(
+void ForumThreadBar::paint(
 		Painter &p,
 		not_null<const Ui::ChatStyle*> st,
 		int y,
 		int w,
 		bool chatWide,
 		bool skipPatternLine) const {
-	Paint(p, st, sender, text, width, view, y, w, chatWide, skipPatternLine);
+	if (const auto strong = thread.get()) {
+		Paint(
+			p,
+			st,
+			strong,
+			text,
+			width,
+			view,
+			y,
+			w,
+			chatWide,
+			skipPatternLine);
+	}
 }
 
-void MonoforumSenderBar::PaintFor(
+int ForumThreadBar::PaintForGetWidth(
 		Painter &p,
 		not_null<const Ui::ChatStyle*> st,
 		not_null<Element*> itemView,
@@ -518,31 +495,49 @@ void MonoforumSenderBar::PaintFor(
 		int y,
 		int w,
 		bool chatWide) {
-	const auto sublist = itemView->data()->savedSublist();
-	const auto sender = (sublist && sublist->parentChat())
-		? sublist->sublistPeer().get()
+	const auto item = itemView->data();
+	const auto topic = item->topic();
+	const auto sublist = item->savedSublist();
+	const auto sender = topic
+		? (Data::Thread*)topic
+		: (sublist && sublist->parentChat())
+		? (Data::Thread*)sublist
 		: nullptr;
-	if (!sender || sender->isMonoforum()) {
-		return;
+	auto text = Ui::Text::String();
+	if (!sender
+		|| !topic
+		|| (sublist && sublist->sublistPeer()->isMonoforum())) {
+		return 0;
+	} else if (topic) {
+		text.setMarkedText(
+			st::semiboldTextStyle,
+			topic->titleWithIconOrLogo(),
+			kMarkupTextOptions,
+			Core::TextContext({ .session = &topic->session() }));
+	} else {
+		text.setText(st::semiboldTextStyle, sublist->sublistPeer()->name());
 	}
-	auto text = Ui::Text::String(st::semiboldTextStyle, sender->name());
 	const auto skip = st::monoforumBarUserpicSkip;
-	const auto userpic = st::msgServicePadding.top()
-		+ st::msgServiceFont->height
-		+ st::msgServicePadding.bottom()
-		- 2 * skip;
+	const auto userpic = sublist
+		? (st::msgServicePadding.top()
+			+ st::msgServiceFont->height
+			+ st::msgServicePadding.bottom()
+			- 2 * skip)
+		: (st::msgServicePadding.left() - 3 * skip);
 	const auto width = skip
 		+ userpic
 		+ skip * 2
 		+ text.maxWidth()
+		+ st::topicButtonArrowSkip
 		+ st::msgServicePadding.right();
 	Paint(p, st, sender, text, width, userpicView, y, w, chatWide, true);
+	return width;
 }
 
-void MonoforumSenderBar::Paint(
+void ForumThreadBar::Paint(
 		Painter &p,
 		not_null<const Ui::ChatStyle*> st,
-		not_null<PeerData*> sender,
+		not_null<Data::Thread*> thread,
 		const Ui::Text::String &text,
 		int width,
 		Ui::PeerUserpicView &view,
@@ -550,8 +545,6 @@ void MonoforumSenderBar::Paint(
 		int w,
 		bool chatWide,
 		bool skipPatternLine) {
-	Expects(sender != nullptr);
-
 	int left = st::msgServiceMargin.left();
 	const auto maxwidth = chatWide
 		? std::min(w, WideChatWidth())
@@ -580,24 +573,47 @@ void MonoforumSenderBar::Paint(
 		p.drawLine(left + use, top, 2 * w, top);
 	}
 
-	const auto userpic = st::msgServicePadding.top()
-		+ st::msgServiceFont->height
-		+ st::msgServicePadding.bottom()
-		- 2 * skip;
-	const auto available = use - (skip + userpic + skip * 2 + st::msgServicePadding.right());
+	const auto sublist = thread->asSublist();
+	const auto userpic = sublist
+		? (st::msgServicePadding.top()
+			+ st::msgServiceFont->height
+			+ st::msgServicePadding.bottom()
+			- 2 * skip)
+		: (st::msgServicePadding.left() - 3 * skip);
+	const auto available = use
+		- (skip
+			+ userpic
+			+ skip * 2
+			+ st::topicButtonArrowSkip
+			+ st::msgServicePadding.right());
 
-	sender->paintUserpic(p, view, left + skip, y + st::msgServiceMargin.top() + skip, userpic);
+	if (sublist) {
+		sublist->sublistPeer()->paintUserpic(
+			p,
+			view,
+			left + skip,
+			y + st::msgServiceMargin.top() + skip,
+			userpic);
+	}
 
+	const auto textLeft = left + skip + userpic + skip * 2;
+	const auto textTop = y
+		+ st::msgServiceMargin.top()
+		+ st::msgServicePadding.top();
 	p.setFont(st::msgServiceFont);
 	p.setPen(st->msgServiceFg());
 	text.draw(p, {
-		.position = {
-			left + skip + userpic + skip * 2,
-			y + st::msgServiceMargin.top() + st::msgServicePadding.top(),
-		},
+		.position = { textLeft, textTop },
 		.availableWidth = available,
 		.elisionLines = 1,
 	});
+
+	st::topicButtonArrow.paint(
+		p,
+		textLeft + available + st::topicButtonArrowPosition.x(),
+		textTop + st::topicButtonArrowPosition.y(),
+		w,
+		st->msgServiceFg()->c);
 }
 
 void ServicePreMessage::init(
@@ -1341,9 +1357,18 @@ void Element::validateText() {
 
 		if (const auto done = item->Get<HistoryServiceTodoCompletions>()) {
 			if (!done->completed.empty() && !done->incompleted.empty()) {
+				const auto todoItemId = (done->incompleted.size() == 1)
+					? done->incompleted.front()
+					: 0;
 				setServicePreMessage(
 					item->composeTodoIncompleted(done),
-					done->lnk);
+					JumpToMessageClickHandler(
+						(done->peerId
+							? history()->owner().peer(done->peerId)
+							: history()->peer),
+						done->msgId,
+						item->fullId(),
+						{ .todoItemId = todoItemId }));
 			} else {
 				setServicePreMessage({});
 			}
@@ -1410,7 +1435,7 @@ void Element::validateTextSkipBlock(bool has, int width, int height) {
 }
 
 void Element::previousInBlocksChanged() {
-	recountMonoforumSenderBarInBlocks();
+	recountThreadBarInBlocks();
 	recountDisplayDateInBlocks();
 	recountAttachToPreviousInBlocks();
 }
@@ -1447,7 +1472,7 @@ bool Element::computeIsAttachToPrevious(not_null<Element*> previous) {
 	if (!Has<DateBadge>()
 		&& !Has<UnreadBar>()
 		&& !Has<ServicePreMessage>()
-		&& !Has<MonoforumSenderBar>()) {
+		&& !Has<ForumThreadBar>()) {
 		const auto prev = previous->data();
 		const auto previousMarkup = prev->inlineReplyMarkup();
 		const auto possible = (std::abs(prev->date() - item->date())
@@ -1559,12 +1584,12 @@ bool Element::isInOneDayWithPrevious() const {
 	return !data()->isEmpty() && !displayDate();
 }
 
-bool Element::displayMonoforumSender() const {
-	return Has<MonoforumSenderBar>();
+bool Element::displayForumThreadBar() const {
+	return Has<ForumThreadBar>();
 }
 
 bool Element::isInOneBunchWithPrevious() const {
-	return !data()->isEmpty() && !displayMonoforumSender();
+	return !data()->isEmpty() && !displayForumThreadBar();
 }
 
 void Element::recountAttachToPreviousInBlocks() {
@@ -1585,34 +1610,49 @@ void Element::recountAttachToPreviousInBlocks() {
 	setAttachToPrevious(attachToPrevious, previous);
 }
 
-void Element::recountMonoforumSenderBarInBlocks() {
+void Element::recountThreadBarInBlocks() {
 	const auto item = data();
+	const auto topic = item->topic();
 	const auto sublist = item->savedSublist();
-	const auto parentChat = sublist ? sublist->parentChat() : nullptr;
-	const auto barPeer = [&]() -> PeerData* {
+	const auto parentChat = (topic && topic->channel()->useSubsectionTabs())
+		? topic->channel().get()
+		: sublist
+		? sublist->parentChat()
+		: nullptr;
+	const auto barThread = [&]() -> Data::Thread* {
 		if (!parentChat
 			|| isHidden()
 			|| item->isEmpty()
 			|| item->isSponsored()) {
 			return nullptr;
 		}
-		const auto sublistPeer = sublist->sublistPeer();
 		if (const auto previous = previousDisplayedInBlocks()) {
 			const auto prev = previous->data();
-			if (const auto prevSublist = prev->savedSublist()) {
+			if (const auto prevTopic = prev->topic()) {
+				Assert(prevTopic->channel() == parentChat);
+				const auto topicRootId = topic->rootId();
+				if (prevTopic->rootId() == topicRootId) {
+					return nullptr;
+				}
+			} else if (const auto prevSublist = prev->savedSublist()) {
 				Assert(prevSublist->parentChat() == parentChat);
+				const auto sublistPeer = sublist->sublistPeer();
 				if (prevSublist->sublistPeer() == sublistPeer) {
 					return nullptr;
 				}
 			}
 		}
-		return (sublistPeer == parentChat) ? nullptr : sublistPeer.get();
+		return topic
+			? (Data::Thread*)topic
+			: (sublist && sublist->sublistPeer() != parentChat)
+			? (Data::Thread*)sublist
+			: nullptr;
 	}();
-	if (barPeer && !Has<MonoforumSenderBar>()) {
-		AddComponents(MonoforumSenderBar::Bit());
-		Get<MonoforumSenderBar>()->init(parentChat, barPeer);
-	} else if (!barPeer && Has<MonoforumSenderBar>()) {
-		RemoveComponents(MonoforumSenderBar::Bit());
+	if (barThread && !Has<ForumThreadBar>()) {
+		AddComponents(ForumThreadBar::Bit());
+		Get<ForumThreadBar>()->init(parentChat, barThread);
+	} else if (!barThread && Has<ForumThreadBar>()) {
+		RemoveComponents(ForumThreadBar::Bit());
 	}
 }
 
@@ -2182,7 +2222,7 @@ SelectedQuote Element::FindSelectedQuote(
 			++i;
 		}
 	}
-	return { item, result, modified.from, overflown };
+	return { item, { result, modified.from }, overflown };
 }
 
 TextSelection Element::FindSelectionFromQuote(
@@ -2190,17 +2230,18 @@ TextSelection Element::FindSelectionFromQuote(
 		const SelectedQuote &quote) {
 	Expects(quote.item != nullptr);
 
-	if (quote.text.empty()) {
+	const auto &rich = quote.highlight.quote;
+	if (rich.empty()) {
 		return {};
 	}
 	const auto &original = quote.item->originalText();
-	if (quote.offset == kSearchQueryOffsetHint) {
+	if (quote.highlight.quoteOffset == kSearchQueryOffsetHint) {
 		return ApplyModificationsFrom(
-			FindSearchQueryHighlight(original.text, quote.text.text),
+			FindSearchQueryHighlight(original.text, rich.text),
 			text);
 	}
 	const auto length = int(original.text.size());
-	const auto qlength = int(quote.text.text.size());
+	const auto qlength = int(rich.text.size());
 	const auto checkAt = [&](int offset) {
 		return TextSelection{
 			uint16(offset),
@@ -2211,7 +2252,7 @@ TextSelection Element::FindSelectionFromQuote(
 		if (offset > length - qlength) {
 			return TextSelection();
 		}
-		const auto i = original.text.indexOf(quote.text.text, offset);
+		const auto i = original.text.indexOf(rich.text, offset);
 		return (i >= 0) ? checkAt(i) : TextSelection();
 	};
 	const auto findOneBefore = [&](int offset) {
@@ -2220,7 +2261,7 @@ TextSelection Element::FindSelectionFromQuote(
 		}
 		const auto end = std::min(offset + qlength - 1, length);
 		const auto from = end - length - 1;
-		const auto i = original.text.lastIndexOf(quote.text.text, from);
+		const auto i = original.text.lastIndexOf(rich.text, from);
 		return (i >= 0) ? checkAt(i) : TextSelection();
 	};
 	const auto findAfter = [&](int offset) {
@@ -2258,7 +2299,7 @@ TextSelection Element::FindSelectionFromQuote(
 			? before
 			: after;
 	};
-	auto result = findTwoWays(quote.offset);
+	auto result = findTwoWays(quote.highlight.quoteOffset);
 	if (result.empty()) {
 		return {};
 	}
@@ -2445,12 +2486,132 @@ int FindViewY(not_null<Element*> view, uint16 symbol, int yfrom) {
 	return origin.y() + (yfrom + ytill) / 2;
 }
 
+int FindViewTaskY(not_null<Element*> view, int taskId, int yfrom) {
+	auto request = HistoryView::StateRequest();
+	request.flags = Ui::Text::StateRequest::Flag::LookupLink;
+	const auto single = st::messageTextStyle.font->height;
+	const auto inner = view->innerGeometry();
+	const auto origin = inner.topLeft();
+	const auto top = 0;
+	const auto bottom = view->height();
+	if (origin.y() < top
+		|| origin.y() + inner.height() > bottom
+		|| inner.height() <= 0) {
+		return yfrom;
+	}
+	const auto media = view->data()->media();
+	const auto todolist = media ? media->todolist() : nullptr;
+	if (!todolist) {
+		return yfrom;
+	}
+	const auto &items = todolist->items;
+	const auto indexOf = [&](int id) -> int {
+		return ranges::find(items, id, &TodoListItem::id) - begin(items);
+	};
+	const auto index = indexOf(taskId);
+	const auto count = int(items.size());
+	if (index == count) {
+		return yfrom;
+	}
+	yfrom = std::max(yfrom - origin.y(), 0);
+	auto ytill = inner.height() - 1;
+	const auto middle = (yfrom + ytill) / 2;
+	const auto fory = [&](int y) {
+		const auto state = view->textState(origin + QPoint(0, y), request);
+		const auto &link = state.link;
+		const auto id = link
+			? link->property(kTodoListItemIdProperty).toInt()
+			: -1;
+		const auto index = (id >= 0) ? indexOf(id) : int(items.size());
+		return (index < count) ? index : (y < middle) ? -1 : count;
+	};
+	auto indexfrom = fory(yfrom);
+	auto indextill = fory(ytill);
+	if ((yfrom >= ytill) || (indexfrom >= index)) {
+		return origin.y() + yfrom;
+	} else if (indextill <= index) {
+		return origin.y() + ytill;
+	}
+	while (ytill - yfrom >= 2 * single) {
+		const auto middle = (yfrom + ytill) / 2;
+		const auto found = fory(middle);
+		if (found == index
+			|| indexfrom > found
+			|| indextill < found) {
+			return origin.y() + middle;
+		} else if (found < index) {
+			yfrom = middle;
+			indexfrom = found;
+		} else {
+			ytill = middle;
+			indextill = found;
+		}
+	}
+	return origin.y() + (yfrom + ytill) / 2;
+}
+
 Window::SessionController *ExtractController(const ClickContext &context) {
 	const auto my = context.other.value<ClickHandlerContext>();
 	if (const auto controller = my.sessionWindow.get()) {
 		return controller;
 	}
 	return nullptr;
+}
+
+TextSelection FindSearchQueryHighlight(
+		const QString &text,
+		const QString &query) {
+	const auto lower = query.toLower();
+	return FindSearchQueryHighlight(text, QStringView(lower));
+}
+
+TextSelection FindSearchQueryHighlight(
+		const QString &text,
+		QStringView lower) {
+	const auto inside = text.toLower();
+	const auto find = [&](QStringView part) {
+		auto skip = 0;
+		if (const auto from = inside.indexOf(part, skip); from >= 0) {
+			if (!from || !inside[from - 1].isLetterOrNumber()) {
+				return int(from);
+			}
+			skip = from + 1;
+		}
+		return -1;
+	};
+	if (const auto from = find(lower); from >= 0) {
+		const auto till = from + lower.size();
+		if (till >= inside.size()
+			|| !(inside.begin() + till)->isLetterOrNumber()) {
+			return { uint16(from), uint16(till) };
+		}
+	}
+	const auto tillEndOfWord = [&](int from) {
+		for (auto till = from + 1; till != inside.size(); ++till) {
+			if (!inside[till].isLetterOrNumber()) {
+				return TextSelection{ uint16(from), uint16(till) };
+			}
+		}
+		return TextSelection{ uint16(from), uint16(inside.size()) };
+	};
+	const auto words = Ui::Text::Words(lower);
+	for (const auto &word : words) {
+		const auto length = int(word.size());
+		const auto cut = length / 2;
+		const auto part = word.mid(0, length - cut);
+		const auto offset = find(part);
+		if (offset < 0) {
+			continue;
+		}
+		for (auto i = 0; i != cut; ++i) {
+			const auto part = word.mid(0, length - i);
+			if (const auto from = find(part); from >= 0) {
+				return tillEndOfWord(from);
+			}
+		}
+		return tillEndOfWord(offset);
+	}
+	return {};
 }
 
 } // namespace HistoryView

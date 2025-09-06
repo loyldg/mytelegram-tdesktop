@@ -1293,7 +1293,7 @@ void EditDirectMessagesPriceBox(
 		object_ptr<Ui::SlideWrap<Ui::VerticalLayout>>(
 			box,
 			object_ptr<Ui::VerticalLayout>(box)),
-		{});
+		style::margins());
 	wrap->toggle(savedValue.has_value(), anim::type::instant);
 	wrap->toggleOn(toggle->toggledChanges());
 
@@ -1313,9 +1313,9 @@ void EditDirectMessagesPriceBox(
 	}, box->lifetime());
 
 	box->addButton(tr::lng_settings_save(), [=] {
-		const auto weak = Ui::MakeWeak(box);
+		const auto weak = base::make_weak(box);
 		callback(toggle->toggled() ? *result : std::optional<int>());
-		if (const auto strong = weak.data()) {
+		if (const auto strong = weak.get()) {
 			strong->closeBox();
 		}
 	});
