@@ -1240,7 +1240,9 @@ void InnerWidget::paintEvent(QPaintEvent *e) {
 			auto to = ceilclamp(r.y() + r.height() - skip, _st->height, 0, _previewResults.size());
 			p.translate(0, from * _st->height);
 			if (from < _previewResults.size()) {
-				const auto searchLowerText = _searchState.query.toLower();
+				const auto searchLowerText = (_searchHashOrCashtag == HashOrCashtag::None)
+					? _searchState.query.toLower()
+					: QString();
 				for (; from < to; ++from) {
 					const auto &result = _previewResults[from];
 					const auto active = isSearchResultActive(result.get(), activeEntry);
@@ -1286,7 +1288,9 @@ void InnerWidget::paintEvent(QPaintEvent *e) {
 					tr::now,
 					lt_count,
 					_searchedMigratedCount + _searchedCount);
-			const auto searchLowerText = _searchState.query.toLower();
+			const auto searchLowerText = (_searchHashOrCashtag == HashOrCashtag::None)
+				? _searchState.query.toLower()
+				: QString();
 			p.fillRect(0, 0, fullWidth, st::searchedBarHeight, st::searchedBarBg);
 			p.setFont(st::searchedBarFont);
 			p.setPen(st::searchedBarFg);
@@ -1974,11 +1978,14 @@ void InnerWidget::mousePressEvent(QMouseEvent *e) {
 		});
 	} else if (_pressed) {
 		auto row = _pressed;
-		const auto weak = base::make_weak(this);
-		const auto updateCallback = [weak, row] {
-			const auto strong = weak.get();
-			if (!strong || !strong->_pinnedShiftAnimation.animating()) {
-				row->entry()->updateChatListEntry();
+		const auto weakThis = base::make_weak(this);
+		const auto weakEntry = base::make_weak(row->entry());
+		const auto updateCallback = [weakThis, weakEntry] {
+			const auto that = weakThis.get();
+			if (!that || !that->_pinnedShiftAnimation.animating()) {
+				if (const auto entry = weakEntry.get()) {
+					entry->updateChatListEntry();
+				}
 			}
 		};
 		const auto origin = e->pos()

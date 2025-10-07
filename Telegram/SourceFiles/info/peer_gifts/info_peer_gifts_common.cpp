@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "info/peer_gifts/info_peer_gifts_common.h"
 
+#include "base/unixtime.h"
 #include "boxes/send_credits_box.h" // SetButtonMarkedLabel
 #include "boxes/star_gift_box.h"
 #include "boxes/sticker_set_box.h"
@@ -33,6 +34,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/effects/premium_graphics.h"
 #include "ui/painter.h"
 #include "window/window_session_controller.h"
+#include "styles/style_chat.h"
 #include "styles/style_credits.h"
 #include "styles/style_layers.h"
 #include "styles/style_overview.h"
@@ -73,7 +75,8 @@ GiftButton::GiftButton(
 	QWidget *parent,
 	not_null<GiftButtonDelegate*> delegate)
 : AbstractButton(parent)
-, _delegate(delegate) {
+, _delegate(delegate)
+, _lockedTimer([=] { refreshLocked(); }) {
 }
 
 GiftButton::~GiftButton() {
@@ -166,6 +169,7 @@ void GiftButton::setDescriptor(const GiftDescriptor &descriptor, Mode mode) {
 			{ 0., anim::with_alpha(st::windowActiveTextFg->c, .3) },
 			{ 1., st::windowActiveTextFg->c },
 		});
+		_lockedUntilDate = 0;
 	}, [&](const GiftTypeStars &data) {
 		const auto soldOut = data.info.limitedCount
 			&& !data.userpic
@@ -219,7 +223,10 @@ void GiftButton::setDescriptor(const GiftDescriptor &descriptor, Mode mode) {
 			_stars->setColorOverride(
 				Ui::Premium::CreditsIconGradientStops());
 		}
+		_lockedUntilDate = data.info.lockedUntilDate;
 	});
+
+	refreshLocked();
 
 	_resolvedDocument = nullptr;
 	_documentLifetime = _delegate->sticker(
@@ -260,6 +267,22 @@ void GiftButton::setDescriptor(const GiftDescriptor &descriptor, Mode mode) {
 	if (_stars) {
 		const auto padding = _button.height() / 2;
 		_stars->setCenter(_button - QMargins(padding, 0, padding, 0));
+	}
+}
+
+void GiftButton::refreshLocked() {
+	_lockedTimer.cancel();
+
+	const auto lockedFor = _lockedUntilDate
+		? std::max(_lockedUntilDate - base::unixtime::now(), TimeId())
+		: TimeId();
+	const auto locked = (lockedFor > 0);
+	if (locked) {
+		_lockedTimer.callOnce(std::min(lockedFor, 86'400) * crl::time(1000));
+	}
+	if (_locked != locked) {
+		_locked = locked;
+		update();
 	}
 }
 
@@ -510,6 +533,12 @@ void GiftButton::paintEvent(QPaintEvent *e) {
 		const auto radius = st::giftBoxGiftRadius;
 		p.drawRoundedRect(outer.marginsRemoved(extend), radius, radius);
 	}
+	if (_locked) {
+		st::giftBoxLockIcon.paint(
+			p,
+			position + st::giftBoxLockIconPosition,
+			width);
+	}
 
 	if (_userpic) {
 		if (!_subscribed) {
@@ -605,6 +634,14 @@ void GiftButton::paintEvent(QPaintEvent *e) {
 				&& !unique
 				&& !data.userpic
 				&& !data.info.limitedLeft;
+			const auto yourLeft = data.info.perUserTotal
+				? (data.info.perUserRemains
+					? tr::lng_gift_stars_your_left(
+						tr::now,
+						lt_count,
+						data.info.perUserRemains)
+					: tr::lng_gift_stars_your_finished(tr::now))
+				: QString();
 			return GiftBadge{
 				.text = (onsale
 					? tr::lng_gift_stars_on_sale(tr::now)
@@ -617,9 +654,13 @@ void GiftButton::paintEvent(QPaintEvent *e) {
 					: (!data.userpic
 						&& !data.info.unique
 						&& data.info.requirePremium)
-					? tr::lng_gift_stars_premium(tr::now)
+					? ((yourLeft.isEmpty() || !_delegate->amPremium())
+						? tr::lng_gift_stars_premium(tr::now)
+						: yourLeft)
 					: (!data.userpic && !data.info.unique)
-					? tr::lng_gift_stars_limited(tr::now)
+					? (yourLeft.isEmpty()
+						? tr::lng_gift_stars_limited(tr::now)
+						: yourLeft)
 					: (count == 1)
 					? tr::lng_gift_limited_of_one(tr::now)
 					: tr::lng_gift_limited_of_count(
@@ -909,9 +950,14 @@ QImage Delegate::cachedBadge(const GiftBadge &badge) {
 	auto &image = _badges[badge];
 	if (image.isNull()) {
 		const auto &extend = buttonExtend();
-		image = ValidateRotatedBadge(badge, extend.top());
+		const auto padding = QMargins(extend.top(), 0, extend.top(), 0);
+		image = ValidateRotatedBadge(badge, padding);
 	}
 	return image;
+}
+
+bool Delegate::amPremium() {
+	return _session->premium();
 }
 
 DocumentData *LookupGiftSticker(
@@ -951,17 +997,19 @@ rpl::producer<not_null<DocumentData*>> GiftStickerValue(
 	});
 }
 
-QImage ValidateRotatedBadge(const GiftBadge &badge, int added) {
+QImage ValidateRotatedBadge(const GiftBadge &badge, QMargins padding) {
 	const auto &font = badge.small
 		? st::giftBoxGiftBadgeFont
-		: st::semiboldFont;
-	const auto twidth = font->width(badge.text) + 2 * added;
+		: st::msgServiceGiftBoxBadgeFont;
+	const auto twidth = font->width(badge.text)
+		+ padding.left()
+		+ padding.right();
 	const auto skip = int(std::ceil(twidth / M_SQRT2));
 	const auto ratio = style::DevicePixelRatio();
 	const auto multiplier = ratio * 3;
 	const auto size = (twidth + font->height * 2);
-	const auto height = font->height + st::lineWidth;
-	const auto textpos = QPoint(size - skip, added);
+	const auto height = padding.top() + font->height + padding.bottom();
+	const auto textpos = QPoint(size - skip, padding.top());
 	auto image = QImage(
 		QSize(size, size) * multiplier,
 		QImage::Format_ARGB32_Premultiplied);
@@ -974,7 +1022,9 @@ QImage ValidateRotatedBadge(const GiftBadge &badge, int added) {
 		p.rotate(45.);
 		p.setFont(font);
 		p.setPen(badge.fg);
-		p.drawText(QPoint(added, font->ascent), badge.text);
+		p.drawText(
+			QPoint(padding.left(), padding.top() + font->ascent),
+			badge.text);
 	}
 
 	auto scaled = image.scaled(

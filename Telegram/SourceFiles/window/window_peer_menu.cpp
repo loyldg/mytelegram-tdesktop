@@ -40,6 +40,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "boxes/peers/add_participants_box.h"
 #include "boxes/peers/edit_forum_topic_box.h"
 #include "boxes/peers/edit_contact_box.h"
+#include "boxes/peers/prepare_short_info_box.h"
 #include "calls/calls_instance.h"
 #include "inline_bots/bot_attach_web_view.h" // InlineBots::PeerType.
 #include "ui/toast/toast.h"
@@ -237,32 +238,6 @@ void PeerMenuAddMuteSubmenuAction(
 				MuteMenu::FillMuteMenu(menu, thread, show);
 			},
 		});
-	}
-}
-
-void ForwardToSelf(
-		std::shared_ptr<Main::SessionShow> show,
-		const Data::ForwardDraft &draft) {
-	const auto session = &show->session();
-	const auto history = session->data().history(session->user());
-	auto resolved = history->resolveForwardDraft(draft);
-	if (!resolved.items.empty()) {
-		const auto count = resolved.items.size();
-		auto action = Api::SendAction(history);
-		action.clearDraft = false;
-		action.generateLocal = false;
-		session->api().forwardMessages(
-			std::move(resolved),
-			action,
-			[=] {
-				auto phrase = rpl::variable<TextWithEntities>(
-					ChatHelpers::ForwardedMessagePhrase({
-					.toCount = 1,
-					.singleMessage = (count == 1),
-					.to1 = session->user(),
-				})).current();
-				show->showToast(std::move(phrase));
-			});
 	}
 }
 
@@ -604,7 +579,12 @@ void Filler::addInfo() {
 		: tr::lng_context_view_channel(tr::now);
 	_addAction(text, [=] {
 		if (const auto strong = weak.get()) {
-			controller->showPeerInfo(strong);
+			if (base::IsCtrlPressed()) {
+				controller->uiShow()->showBox(
+					PrepareShortInfoBox(infoPeer, controller));
+			} else {
+				controller->showPeerInfo(strong);
+			}
 		}
 	}, infoPeer->isUser() ? &st::menuIconProfile : &st::menuIconInfo);
 }
@@ -1185,6 +1165,9 @@ void Filler::addViewStatistics() {
 }
 
 bool Filler::skipCreateActions() const {
+	if (_peer && _peer->isRepliesChat()) {
+		return true;
+	}
 	const auto isJoinChannel = [&] {
 		if (_request.section != Section::Replies) {
 			if (const auto c = _peer->asChannel(); c && !c->amIn()) {
@@ -3889,6 +3872,32 @@ void PeerMenuConfirmToggleFee(
 			*paidAmount = result.data().vstars_amount().v;
 		}).send();
 	}));
+}
+
+void ForwardToSelf(
+		std::shared_ptr<Main::SessionShow> show,
+		const Data::ForwardDraft &draft) {
+	const auto session = &show->session();
+	const auto history = session->data().history(session->user());
+	auto resolved = history->resolveForwardDraft(draft);
+	if (!resolved.items.empty()) {
+		const auto count = resolved.items.size();
+		auto action = Api::SendAction(history);
+		action.clearDraft = false;
+		action.generateLocal = false;
+		session->api().forwardMessages(
+			std::move(resolved),
+			action,
+			[=] {
+				auto phrase = rpl::variable<TextWithEntities>(
+					ChatHelpers::ForwardedMessagePhrase({
+					.toCount = 1,
+					.singleMessage = (count == 1),
+					.to1 = session->user(),
+				})).current();
+				show->showToast(std::move(phrase));
+			});
+	}
 }
 
 } // namespace Window

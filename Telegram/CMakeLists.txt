@@ -35,7 +35,7 @@ include(cmake/td_mtproto.cmake)
 include(cmake/td_scheme.cmake)
 include(cmake/td_tde2e.cmake)
 include(cmake/td_ui.cmake)
-include(cmake/generate_appdata_changelog.cmake)
+include(cmake/generate_appstream_changelog.cmake)
 
 if (DESKTOP_APP_TEST_APPS)
     include(cmake/tests.cmake)
@@ -636,6 +636,8 @@ PRIVATE
     data/data_report.h
     data/data_saved_messages.cpp
     data/data_saved_messages.h
+    data/data_saved_music.cpp
+    data/data_saved_music.h
     data/data_saved_sublist.cpp
     data/data_saved_sublist.h
     data/data_search_controller.cpp
@@ -815,6 +817,8 @@ PRIVATE
     history/view/media/history_view_poll.h
     history/view/media/history_view_premium_gift.cpp
     history/view/media/history_view_premium_gift.h
+    history/view/media/history_view_save_document_action.cpp
+    history/view/media/history_view_save_document_action.h
     history/view/media/history_view_service_box.cpp
     history/view/media/history_view_service_box.h
     history/view/media/history_view_similar_channels.cpp
@@ -1050,6 +1054,11 @@ PRIVATE
     info/reactions_list/info_reactions_list_widget.h
     info/requests_list/info_requests_list_widget.cpp
     info/requests_list/info_requests_list_widget.h
+    info/saved/info_saved_music_common.h
+    info/saved/info_saved_music_provider.cpp
+    info/saved/info_saved_music_provider.h
+    info/saved/info_saved_music_widget.cpp
+    info/saved/info_saved_music_widget.h
     info/saved/info_saved_sublists_widget.cpp
     info/saved/info_saved_sublists_widget.h
     info/settings/info_settings_widget.cpp
@@ -1786,6 +1795,8 @@ if (WIN32)
     if (QT_VERSION LESS 6)
         target_link_libraries(Telegram PRIVATE desktop-app::win_directx_helper)
     endif()
+
+    target_link_options(Telegram PRIVATE /PDBPAGESIZE:8192)
 elseif (APPLE)
     if (NOT DESKTOP_APP_USE_PACKAGED)
         target_link_libraries(Telegram PRIVATE desktop-app::external_iconv)
@@ -2121,7 +2132,7 @@ if (LINUX AND DESKTOP_APP_USE_PACKAGED)
     include(GNUInstallDirs)
     configure_file("../lib/xdg/org.telegram.desktop.service" "${CMAKE_CURRENT_BINARY_DIR}/org.telegram.desktop.service" @ONLY)
     configure_file("../lib/xdg/org.telegram.desktop.metainfo.xml" "${CMAKE_CURRENT_BINARY_DIR}/org.telegram.desktop.metainfo.xml" @ONLY)
-    generate_appdata_changelog(Telegram "${CMAKE_SOURCE_DIR}/changelog.txt" "${CMAKE_CURRENT_BINARY_DIR}/org.telegram.desktop.metainfo.xml")
+    generate_appstream_changelog(Telegram "${CMAKE_SOURCE_DIR}/changelog.txt" "${CMAKE_CURRENT_BINARY_DIR}/org.telegram.desktop.metainfo.xml")
     install(TARGETS Telegram RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}" BUNDLE DESTINATION "${CMAKE_INSTALL_BINDIR}")
     install(FILES "Resources/art/icon16.png" DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/16x16/apps" RENAME "org.telegram.desktop.png")
     install(FILES "Resources/art/icon32.png" DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/32x32/apps" RENAME "org.telegram.desktop.png")

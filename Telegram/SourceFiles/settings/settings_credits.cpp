@@ -53,6 +53,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/wrap/fade_wrap.h"
 #include "ui/wrap/slide_wrap.h"
 #include "ui/wrap/vertical_layout.h"
+#include "ui/controls/swipe_handler.h"
+#include "ui/controls/swipe_handler_data.h"
 #include "window/window_session_controller.h"
 #include "styles/style_chat.h"
 #include "styles/style_chat_helpers.h"
@@ -65,6 +67,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_statistics.h"
 #include "styles/style_menu_icons.h"
 #include "styles/style_channel_earn.h"
+#include "styles/style_chat.h"
 
 namespace Settings {
 namespace {
@@ -91,6 +94,7 @@ public:
 
 private:
 	void setupContent();
+	void setupSwipeBack();
 	void setupHistory(not_null<Ui::VerticalLayout*> container);
 	void setupSubscriptions(not_null<Ui::VerticalLayout*> container);
 	const not_null<Window::SessionController*> _controller;
@@ -128,6 +132,7 @@ Credits::Credits(
 		: Ui::GenerateStars(st::creditsBalanceStarHeight, 1)) {
 	_controller->session().giftBoxStickersPacks().tonLoad();
 	setupContent();
+	setupSwipeBack();
 
 	_controller->session().premiumPossibleValue(
 	) | rpl::start_with_next([=](bool premiumPossible) {
@@ -408,6 +413,46 @@ void Credits::setupHistory(not_null<Ui::VerticalLayout*> container) {
 	}
 }
 
+void Credits::setupSwipeBack() {
+	using namespace Ui::Controls;
+	
+	auto swipeBackData = lifetime().make_state<SwipeBackResult>();
+	
+	auto update = [=](SwipeContextData data) {
+		if (data.translation > 0) {
+			if (!swipeBackData->callback) {
+				(*swipeBackData) = SetupSwipeBack(
+					this,
+					[]() -> std::pair<QColor, QColor> {
+						return {
+							st::historyForwardChooseBg->c,
+							st::historyForwardChooseFg->c,
+						};
+					});
+			}
+			swipeBackData->callback(data);
+			return;
+		} else if (swipeBackData->lifetime) {
+			(*swipeBackData) = {};
+		}
+	};
+	
+	auto init = [=](int, Qt::LayoutDirection direction) {
+		return (direction == Qt::RightToLeft)
+			? DefaultSwipeBackHandlerFinishData([=] {
+				_showBack.fire({});
+			})
+			: SwipeHandlerFinishData();
+	};
+	
+	SetupSwipeHandler({
+		.widget = this,
+		.scroll = v::null,
+		.update = std::move(update),
+		.init = std::move(init),
+	});
+}
+
 void Credits::setupContent() {
 	const auto content = Ui::CreateChild<Ui::VerticalLayout>(this);
 	const auto isCurrency = _creditsType == CreditsType::Ton;
@@ -600,15 +645,6 @@ void Credits::setupContent() {
 				CreditsAmount value,
 				float64 multiplier) {
 			Ui::AddSkip(container);
-			{
-				const auto header = container->add(
-					object_ptr<Ui::FlatLabel>(
-						container,
-						tr::lng_channel_earn_balance_title(),
-						st::channelEarnHeaderLabel),
-					st::boxRowPadding);
-				header->resizeToWidth(header->width());
-			}
 			Ui::AddSkip(container);
 
 			const auto labels = container->add(
@@ -620,7 +656,11 @@ void Credits::setupContent() {
 				st::channelEarnBalanceMajorLabel);
 			{
 				const auto &m = st::channelEarnCurrencyCommonMargins;
-				const auto p = QMargins(m.left(), 0, m.right(), m.bottom());
+				const auto p = QMargins(
+					m.left(),
+					-m.top(),
+					m.right(),
+					m.bottom());
 				AddEmojiToMajor(majorLabel, rpl::single(value), {}, p);
 			}
 			majorLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
@@ -657,13 +697,14 @@ void Credits::setupContent() {
 
 			Ui::AddSkip(container);
 
-			const auto &stButton = st::defaultActiveButton;
+			const auto &stButton = st::creditsSettingsBigBalanceButton;
 			const auto button = container->add(
 				object_ptr<Ui::RoundButton>(
 					container,
 					rpl::never<QString>(),
 					stButton),
-				st::boxRowPadding);
+				st::boxRowPadding,
+				style::al_top);
 
 			const auto label = Ui::CreateChild<Ui::FlatLabel>(
 				button,
@@ -698,6 +739,7 @@ void Credits::setupContent() {
 				_controller->uiShow());
 			Ui::ToggleChildrenVisibility(button, true);
 
+			Ui::AddSkip(container);
 			Ui::AddSkip(container);
 			Ui::AddSkip(container);
 			Ui::AddDividerText(
@@ -942,18 +984,11 @@ Fn<void()> BuyStarsHandler::handler(
 			if (const auto onstack = paid) {
 				onstack();
 			}
-		}, nullptr, options);
+		}, box->showFinishes(), nullptr, options);
 
-		const auto button = box->addButton(tr::lng_close(), [=] {
+		box->addButton(tr::lng_close(), [=] {
 			box->closeBox();
 		});
-		const auto buttonWidth = st::boxWideWidth
-			- rect::m::sum::h(st::giveawayGiftCodeBox.buttonPadding);
-		button->widthValue() | rpl::filter([=] {
-			return (button->widthNoMargins() != buttonWidth);
-		}) | rpl::start_with_next([=] {
-			button->resizeToWidth(buttonWidth);
-		}, button->lifetime());
 	};
 	return crl::guard(this, [=] {
 		if (_api && !_api->options().empty()) {

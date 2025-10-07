@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "base/qt/qt_compare.h"
+#include "base/timer.h"
 #include "data/data_star_gift.h"
 #include "ui/abstract_button.h"
 #include "ui/effects/premium_stars_colored.h"
@@ -146,6 +147,7 @@ public:
 		const GiftDescriptor &descriptor) = 0;
 	[[nodiscard]] virtual not_null<StickerPremiumMark*> hiddenMark() = 0;
 	[[nodiscard]] virtual QImage cachedBadge(const GiftBadge &badge) = 0;
+	[[nodiscard]] virtual bool amPremium() = 0;
 };
 
 class GiftButton final : public Ui::AbstractButton {
@@ -176,6 +178,7 @@ private:
 		int width,
 		int height);
 
+	void refreshLocked();
 	void setDocument(not_null<DocumentData*> document);
 	[[nodiscard]] QMargins currentExtend() const;
 	[[nodiscard]] bool small() const;
@@ -203,6 +206,10 @@ private:
 	bool _subscribed = false;
 	bool _patterned = false;
 	bool _selected = false;
+	bool _locked = false;
+
+	base::Timer _lockedTimer;
+	TimeId _lockedUntilDate = 0;
 
 	QRect _button;
 	QMargins _extend;
@@ -238,6 +245,7 @@ public:
 		const GiftDescriptor &descriptor) override;
 	not_null<StickerPremiumMark*> hiddenMark() override;
 	QImage cachedBadge(const GiftBadge &badge) override;
+	bool amPremium() override;
 
 private:
 	const not_null<Main::Session*> _session;
@@ -260,7 +268,9 @@ private:
 	not_null<Main::Session*> session,
 	const GiftDescriptor &descriptor);
 
-[[nodiscard]] QImage ValidateRotatedBadge(const GiftBadge &badge, int added);
+[[nodiscard]] QImage ValidateRotatedBadge(
+	const GiftBadge &badge,
+	QMargins padding);
 
 void SelectGiftToUnpin(
 	std::shared_ptr<ChatHelpers::Show> show,
