@@ -3072,7 +3072,6 @@ void AddWithdrawalWidget(
 	const auto buttonsContainer = withdrawalWrap->entity()->add(
 		Ui::CreateSkipWidget(withdrawalWrap->entity(), stButton.height),
 		st::boxRowPadding);
-	withdrawalWrap->toggle(withdrawalEnabled, anim::type::instant);
 
 	const auto button = Ui::CreateChild<Ui::RoundButton>(
 		buttonsContainer,
@@ -3085,14 +3084,47 @@ void AddWithdrawalWidget(
 		stButton);
 	buttonCredits->setTextTransform(
 		Ui::RoundButton::TextTransform::NoTransform);
+	{
+		const auto icon = Ui::CreateChild<Ui::RpWidget>(buttonCredits);
+		const auto &st = st::msgBotKbUrlIcon;
+		icon->resize(st.width(), st.height());
+		icon->paintRequest() | rpl::start_with_next([=] {
+			auto p = QPainter(icon);
+			st.paint(p, { 0, 0 }, icon->width(), stButton.textFg->c);
+		}, icon->lifetime());
+		buttonCredits->sizeValue(
+		) | rpl::start_with_next([=, padding = st::msgBotKbIconPadding] {
+			icon->moveToRight(padding, padding);
+		}, icon->lifetime());
+		icon->setAttribute(Qt::WA_TransparentForMouseEvents);
+	}
 
 	Ui::ToggleChildrenVisibility(buttonsContainer, true);
+
+	const auto updateButtonState = [=](bool disabled) {
+		button->setBrushOverride(disabled
+			? std::optional(st::windowSubTextFg)
+			: std::nullopt);
+		button->setAttribute(Qt::WA_TransparentForMouseEvents, disabled);
+	};
+
+	struct UrlState {
+		QString url;
+		base::unique_qptr<Ui::PopupMenu> menu;
+	};
+	const auto urlState = buttonsContainer->lifetime().make_state<UrlState>();
 
 	rpl::combine(
 		std::move(secondButtonUrl),
 		buttonsContainer->sizeValue()
 	) | rpl::start_with_next([=](const QString &url, const QSize &size) {
-		if (url.isEmpty()) {
+		const auto secondVisible = !url.isEmpty();
+		urlState->url = url;
+		withdrawalWrap->toggle(
+			withdrawalEnabled || secondVisible,
+			anim::type::instant);
+		updateButtonState(!withdrawalEnabled);
+		if (!secondVisible) {
 			button->resize(size.width(), size.height());
 			buttonCredits->resize(0, 0);
 		} else {
@@ -3103,6 +3135,27 @@ void AddWithdrawalWidget(
 			buttonCredits->setClickedCallback([=] {
 				UrlClickHandler::Open(url);
 			});
+			buttonCredits->events(
+			) | rpl::filter([](not_null<QEvent*> e) {
+				return e->type() == QEvent::ContextMenu;
+			}) | rpl::start_with_next([=](not_null<QEvent*> e) {
+				if (urlState->url.isEmpty()) {
+					return;
+				}
+				urlState->menu = base::make_unique_q<Ui::PopupMenu>(
+					buttonCredits,
+					st::popupMenuWithIcons);
+				urlState->menu->addAction(
+					tr::lng_context_copy_link(tr::now),
+					[=, show = controller->uiShow()] {
+						TextUtilities::SetClipboardText({ urlState->url });
+						show->showToast(
+							tr::lng_channel_public_link_copied(tr::now));
+					},
+					&st::menuIconCopy);
+				urlState->menu->popup(QCursor::pos());
+				e->accept();
+			}, buttonCredits->lifetime());
 		}
 	}, buttonsContainer->lifetime());
 
@@ -3113,7 +3166,9 @@ void AddWithdrawalWidget(
 	rpl::duplicate(
 		lockedValue
 	) | rpl::start_with_next([=](bool v) {
-		button->setAttribute(Qt::WA_TransparentForMouseEvents, v);
+		if (withdrawalEnabled) {
+			updateButtonState(v);
+		}
 	}, button->lifetime());
 
 	const auto session = &controller->session();

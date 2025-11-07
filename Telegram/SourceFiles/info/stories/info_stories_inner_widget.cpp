@@ -24,6 +24,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "info/profile/info_profile_top_bar.h"
 #include "info/profile/info_profile_values.h"
 #include "info/profile/info_profile_widget.h"
+#include "info/saved/info_saved_music_common.h"
 #include "info/stories/info_stories_albums.h"
 #include "info/stories/info_stories_widget.h"
 #include "info/info_controller.h"
@@ -263,6 +264,10 @@ void InnerWidget::setupAlbums() {
 
 InnerWidget::~InnerWidget() = default;
 
+rpl::producer<> InnerWidget::backRequest() const {
+	return _backClicks.events();
+}
+
 void InnerWidget::setupTop() {
 	const auto albumId = _albumId.current();
 	if (_addingToAlbumId) {
@@ -293,8 +298,24 @@ void InnerWidget::startTop() {
 void InnerWidget::createProfileTop() {
 	startTop();
 
+	Info::Saved::SetupSavedMusic(
+		_top,
+		_controller,
+		_peer,
+		_topBarColor.value());
+
 	using namespace Profile;
-	AddDetails(_top, _controller, _peer, nullptr, nullptr, { v::null });
+	auto mainTracker = Ui::MultiSlideTracker();
+	auto dividerOverridden = rpl::variable<bool>(false);
+	AddDetails(
+		_top,
+		_controller,
+		_peer,
+		nullptr,
+		nullptr,
+		{ v::null },
+		mainTracker,
+		dividerOverridden);
 
 	auto tracker = Ui::MultiSlideTracker();
 	const auto dividerWrap = _top->add(
@@ -504,6 +525,8 @@ base::weak_qptr<Ui::RpWidget> InnerWidget::createPinnedToTop(
 			.backToggles = _backToggles.value(),
 			.showFinished = _showFinished.events(),
 		});
+	content->backRequest(
+	) | rpl::start_to_stream(_backClicks, content->lifetime());
 	_topBarColor = content->edgeColor();
 	return base::make_weak(not_null<Ui::RpWidget*>{ content });
 }

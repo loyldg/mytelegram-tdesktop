@@ -967,14 +967,19 @@ template <typename Text, typename ToggleOn, typename Callback>
 		ToggleOn &&toggleOn,
 		Callback &&callback,
 		Ui::MultiSlideTracker &tracker,
+		Ui::MultiSlideTracker *buttonTracker,
 		const style::SettingsButton &st = st::infoMainButton) {
-	tracker.track(AddActionButton(
+	const auto button = AddActionButton(
 		parent,
 		std::move(text) | Ui::Text::ToUpper(),
 		std::move(toggleOn),
 		std::move(callback),
 		nullptr,
-		st));
+		st);
+	tracker.track(button);
+	if (buttonTracker) {
+		buttonTracker->track(button);
+	}
 }
 
 rpl::producer<CreditsAmount> AddCurrencyAction(
@@ -1147,15 +1152,21 @@ public:
 		not_null<Controller*> controller,
 		not_null<Ui::RpWidget*> parent,
 		not_null<PeerData*> peer,
-		Origin origin);
+		Origin origin,
+		Ui::MultiSlideTracker &mainTracker,
+		rpl::variable<bool> &dividerOverridden);
 	DetailsFiller(
 		not_null<Controller*> controller,
 		not_null<Ui::RpWidget*> parent,
-		not_null<Data::SavedSublist*> sublist);
+		not_null<Data::SavedSublist*> sublist,
+		Ui::MultiSlideTracker &mainTracker,
+		rpl::variable<bool> &dividerOverridden);
 	DetailsFiller(
 		not_null<Controller*> controller,
 		not_null<Ui::RpWidget*> parent,
-		not_null<Data::ForumTopic*> topic);
+		not_null<Data::ForumTopic*> topic,
+		Ui::MultiSlideTracker &mainTracker,
+		rpl::variable<bool> &dividerOverridden);
 
 	object_ptr<Ui::RpWidget> fill();
 
@@ -1164,12 +1175,19 @@ private:
 	object_ptr<Ui::RpWidget> setupInfo();
 	void setupMainApp();
 	void setupBotPermissions();
+	void addViewChannelButton(
+		Ui::MultiSlideTracker &tracker,
+		not_null<ChannelData*> channel,
+		Ui::MultiSlideTracker *buttonTracker);
 
-	void addReportReaction(Ui::MultiSlideTracker &tracker);
+	void addReportReaction(
+		Ui::MultiSlideTracker &tracker,
+		Ui::MultiSlideTracker *buttonTracker);
 	void addReportReaction(
 		GroupReactionOrigin data,
 		bool ban,
-		Ui::MultiSlideTracker &tracker);
+		Ui::MultiSlideTracker &tracker,
+		Ui::MultiSlideTracker *buttonTracker);
 
 	template <
 		typename Widget,
@@ -1189,6 +1207,8 @@ private:
 	Data::ForumTopic *_topic = nullptr;
 	Data::SavedSublist *_sublist = nullptr;
 	Origin _origin;
+	Ui::MultiSlideTracker &_mainTracker;
+	rpl::variable<bool> &_dividerOverridden;
 	object_ptr<Ui::VerticalLayout> _wrap;
 
 };
@@ -1279,33 +1299,45 @@ DetailsFiller::DetailsFiller(
 	not_null<Controller*> controller,
 	not_null<Ui::RpWidget*> parent,
 	not_null<PeerData*> peer,
-	Origin origin)
+	Origin origin,
+	Ui::MultiSlideTracker &mainTracker,
+	rpl::variable<bool> &dividerOverridden)
 : _controller(controller)
 , _parent(parent)
 , _peer(peer)
 , _origin(origin)
+, _mainTracker(mainTracker)
+, _dividerOverridden(dividerOverridden)
 , _wrap(_parent) {
 }
 
 DetailsFiller::DetailsFiller(
 	not_null<Controller*> controller,
 	not_null<Ui::RpWidget*> parent,
-	not_null<Data::SavedSublist*> sublist)
+	not_null<Data::SavedSublist*> sublist,
+	Ui::MultiSlideTracker &mainTracker,
+	rpl::variable<bool> &dividerOverridden)
 : _controller(controller)
 , _parent(parent)
 , _peer(sublist->sublistPeer())
 , _sublist(sublist)
+, _mainTracker(mainTracker)
+, _dividerOverridden(dividerOverridden)
 , _wrap(_parent) {
 }
 
 DetailsFiller::DetailsFiller(
 	not_null<Controller*> controller,
 	not_null<Ui::RpWidget*> parent,
-	not_null<Data::ForumTopic*> topic)
+	not_null<Data::ForumTopic*> topic,
+	Ui::MultiSlideTracker &mainTracker,
+	rpl::variable<bool> &dividerOverridden)
 : _controller(controller)
 , _parent(parent)
 , _peer(topic->peer())
 , _topic(topic)
+, _mainTracker(mainTracker)
+, _dividerOverridden(dividerOverridden)
 , _wrap(_parent) {
 }
 
@@ -1321,7 +1353,11 @@ bool SetClickContext(
 }
 
 object_ptr<Ui::RpWidget> DetailsFiller::setupInfo() {
-	auto result = object_ptr<Ui::VerticalLayout>(_wrap);
+	auto wrap = object_ptr<Ui::SlideWrap<Ui::VerticalLayout>>(
+		_wrap,
+		object_ptr<Ui::VerticalLayout>(_wrap));
+	_mainTracker.track(wrap.data());
+	const auto result = wrap->entity();
 	auto tracker = Ui::MultiSlideTracker();
 
 	// Fill context for a mention / hashtag / bot command link.
@@ -1464,7 +1500,7 @@ object_ptr<Ui::RpWidget> DetailsFiller::setupInfo() {
 			not_null<Ui::FlatLabel*> label,
 			int rightSkip) {
 		const auto parent = label->parentWidget();
-		const auto container = result.data();
+		const auto container = result;
 		rpl::combine(
 			container->widthValue(),
 			label->geometryValue(),
@@ -1634,13 +1670,6 @@ object_ptr<Ui::RpWidget> DetailsFiller::setupInfo() {
 				QString()
 			).text->setLinksTrusted();
 		}
-
-		AddMainButton(
-			result,
-			tr::lng_info_add_as_contact(),
-			CanAddContactValue(user),
-			[=] { controller->window().show(Box(EditContactBox, controller, user)); },
-			tracker);
 	} else {
 		const auto topicRootId = _topic ? _topic->rootId() : 0;
 		const auto addToLink = topicRootId
@@ -1648,7 +1677,8 @@ object_ptr<Ui::RpWidget> DetailsFiller::setupInfo() {
 			: QString();
 		auto linkText = LinkValue(
 			_peer,
-			true
+			true,
+			topicRootId
 		) | rpl::map([=](const LinkWithUrl &link) {
 			const auto text = link.text;
 			return text.isEmpty()
@@ -1661,7 +1691,7 @@ object_ptr<Ui::RpWidget> DetailsFiller::setupInfo() {
 		});
 		const auto linkLine = addInfoOneLine(
 			(topicRootId
-				? tr::lng_info_link_label(Ui::Text::WithEntities)
+				? tr::lng_info_link_topic_label(Ui::Text::WithEntities)
 				: UsernamesSubtext(_peer, tr::lng_info_link_label())),
 			std::move(linkText),
 			QString());
@@ -1674,7 +1704,7 @@ object_ptr<Ui::RpWidget> DetailsFiller::setupInfo() {
 		linkLine.subtext->overrideLinkClickHandler(linkCallback);
 		linkLine.text->setContextMenuHook(lnkHook);
 		linkLine.subtext->setContextMenuHook(lnkHook);
-		{
+		if (!topicRootId || !_peer->username().isEmpty()) {
 			const auto qr = Ui::CreateChild<Ui::IconButton>(
 				linkLine.text->parentWidget(),
 				st::infoProfileLabeledButtonQr);
@@ -1712,8 +1742,10 @@ object_ptr<Ui::RpWidget> DetailsFiller::setupInfo() {
 			addTranslateToMenu(about.text, AboutWithAdvancedValue(_peer));
 		}
 	}
+	wrap->toggleOn(tracker.atLeastOneShownValue());
+	wrap->finishAnimating();
 
-	return result;
+	return wrap;
 }
 
 object_ptr<Ui::RpWidget> DetailsFiller::setupPersonalChannel(
@@ -2030,7 +2062,6 @@ void DetailsFiller::setupMainApp() {
 		UrlClickHandler::Open(url);
 		return false;
 	});
-	Ui::AddSkip(_wrap);
 }
 
 void DetailsFiller::setupBotPermissions() {
@@ -2060,11 +2091,11 @@ void DetailsFiller::setupBotPermissions() {
 		)).send();
 	}, emoji->lifetime());
 	AddSkip(_wrap);
-	AddDivider(_wrap);
-	AddSkip(_wrap);
 }
 
-void DetailsFiller::addReportReaction(Ui::MultiSlideTracker &tracker) {
+void DetailsFiller::addReportReaction(
+		Ui::MultiSlideTracker &tracker,
+		Ui::MultiSlideTracker *buttonTracker) {
 	v::match(_origin.data, [&](GroupReactionOrigin data) {
 		const auto user = _peer->asUser();
 		if (_peer->isSelf()) {
@@ -2081,7 +2112,7 @@ void DetailsFiller::addReportReaction(Ui::MultiSlideTracker &tracker) {
 				const auto ban = channel->canBanMembers()
 					&& (!user || !channel->mgInfo->admins.contains(user->id))
 					&& (!user || channel->mgInfo->creator != user);
-				addReportReaction(data, ban, tracker);
+				addReportReaction(data, ban, tracker, buttonTracker);
 			}
 		}
 	}, [](const auto &) {});
@@ -2090,7 +2121,8 @@ void DetailsFiller::addReportReaction(Ui::MultiSlideTracker &tracker) {
 void DetailsFiller::addReportReaction(
 		GroupReactionOrigin data,
 		bool ban,
-		Ui::MultiSlideTracker &tracker) {
+		Ui::MultiSlideTracker &tracker,
+		Ui::MultiSlideTracker *buttonTracker) {
 	const auto peer = _peer;
 	if (!peer) {
 		return;
@@ -2098,6 +2130,11 @@ void DetailsFiller::addReportReaction(
 	const auto controller = _controller->parentController();
 	const auto forceHidden = std::make_shared<rpl::variable<bool>>(false);
 	const auto user = peer->asUser();
+	const auto wrap = _wrap->add(
+		object_ptr<Ui::SlideWrap<Ui::VerticalLayout>>(
+			_wrap.data(),
+			object_ptr<Ui::VerticalLayout>(_wrap.data())));
+	Ui::AddSkip(wrap->entity());
 	auto shown = user
 		? rpl::combine(
 			Info::Profile::IsContactValue(user),
@@ -2108,6 +2145,12 @@ void DetailsFiller::addReportReaction(
 	const auto sent = [=] {
 		*forceHidden = true;
 	};
+	wrap->toggleOn(rpl::duplicate(shown));
+	rpl::duplicate(shown) | rpl::start_with_next([=](bool shown) {
+		if (shown) {
+			_dividerOverridden.force_assign(false);
+		}
+	}, wrap->lifetime());
 	AddMainButton(
 		_wrap,
 		(ban
@@ -2117,38 +2160,96 @@ void DetailsFiller::addReportReaction(
 		[=] { controller->show(
 			Box(ReportReactionBox, controller, peer, data, ban, sent)); },
 		tracker,
+		buttonTracker,
 		st::infoMainButtonAttention);
+}
+
+void DetailsFiller::addViewChannelButton(
+		Ui::MultiSlideTracker &tracker,
+		not_null<ChannelData*> channel,
+		Ui::MultiSlideTracker *buttonTracker) {
+	using namespace rpl::mappers;
+
+	const auto wrap = _wrap->add(
+		object_ptr<Ui::SlideWrap<Ui::VerticalLayout>>(
+			_wrap.data(),
+			object_ptr<Ui::VerticalLayout>(_wrap.data())));
+	Ui::AddSkip(wrap->entity());
+
+	const auto window = _controller->parentController();
+	auto activePeerValue = window->activeChatValue(
+	) | rpl::map([](Dialogs::Key key) {
+		return key.peer();
+	});
+	auto viewChannelVisible = rpl::combine(
+		_controller->wrapValue(),
+		std::move(activePeerValue),
+		(_1 != Wrap::Side) || (_2 != channel));
+	auto viewChannel = [=] {
+		window->showPeerHistory(
+			channel,
+			Window::SectionShow::Way::Forward);
+	};
+	wrap->toggleOn(rpl::duplicate(viewChannelVisible));
+	AddMainButton(
+		wrap->entity(),
+		tr::lng_profile_view_channel(),
+		std::move(viewChannelVisible),
+		std::move(viewChannel),
+		tracker,
+		buttonTracker);
 }
 
 object_ptr<Ui::RpWidget> DetailsFiller::fill() {
 	Expects(!_topic || !_topic->creating());
 
-	if (!_topic) {
-	} else {
-		add(object_ptr<Ui::BoxContentDivider>(_wrap));
-	}
 	if (const auto user = _sublist ? nullptr : _peer->asUser()) {
 		add(setupPersonalChannel(user));
 	}
-	add(CreateSkipWidget(_wrap));
+	add(CreateSlideSkipWidget(_wrap))->toggleOn(
+		_mainTracker.atLeastOneShownValue());
 	add(setupInfo());
+	auto lastButtonTracker = Ui::MultiSlideTracker();
 	if (const auto user = _peer->asUser()) {
+		{
+			const auto wrap = _wrap->add(
+				object_ptr<Ui::SlideWrap<Ui::VerticalLayout>>(
+					_wrap.data(),
+					object_ptr<Ui::VerticalLayout>(_wrap.data())));
+			Ui::AddSkip(wrap->entity());
+			AddMainButton(
+				wrap->entity(),
+				tr::lng_info_add_as_contact(),
+				CanAddContactValue(user),
+				[=, controller = _controller->parentController()] {
+					controller->uiShow()->show(
+						Box(EditContactBox, controller, user));
+				},
+				_mainTracker,
+				&lastButtonTracker);
+			wrap->toggleOn(CanAddContactValue(user));
+		}
 		if (const auto info = user->botInfo.get()) {
 			if (info->hasMainApp) {
+				_dividerOverridden.force_assign(true);
 				setupMainApp();
 			}
 			if (info->canManageEmojiStatus) {
+				_dividerOverridden.force_assign(false);
 				setupBotPermissions();
 			}
 		}
 		if (!user->isSelf() && !_sublist) {
-			auto topSkip = _wrap->add(CreateSlideSkipWidget(_wrap));
-			Ui::MultiSlideTracker tracker;
-			addReportReaction(tracker);
-			topSkip->toggleOn(std::move(tracker).atLeastOneShownValue());
+			addReportReaction(_mainTracker, &lastButtonTracker);
+		}
+	} else if (const auto channel = _peer->asChannel()) {
+		if (!channel->isMegagroup()) {
+			_dividerOverridden.force_assign(false);
+			addViewChannelButton(_mainTracker, channel, &lastButtonTracker);
 		}
 	}
-	add(CreateSkipWidget(_wrap));
+	add(CreateSlideSkipWidget(_wrap))->toggleOn(
+		lastButtonTracker.atLeastOneShownValue());
 
 	return std::move(_wrap);
 }
@@ -2602,24 +2703,46 @@ object_ptr<Ui::RpWidget> SetupDetails(
 		not_null<Controller*> controller,
 		not_null<Ui::RpWidget*> parent,
 		not_null<PeerData*> peer,
-		Origin origin) {
-	DetailsFiller filler(controller, parent, peer, origin);
+		Origin origin,
+		Ui::MultiSlideTracker &mainTracker,
+		rpl::variable<bool> &dividerOverridden) {
+	DetailsFiller filler(
+		controller,
+		parent,
+		peer,
+		origin,
+		mainTracker,
+		dividerOverridden);
 	return filler.fill();
 }
 
 object_ptr<Ui::RpWidget> SetupDetails(
 		not_null<Controller*> controller,
 		not_null<Ui::RpWidget*> parent,
-		not_null<Data::SavedSublist*> sublist) {
-	DetailsFiller filler(controller, parent, sublist);
+		not_null<Data::SavedSublist*> sublist,
+		Ui::MultiSlideTracker &mainTracker,
+		rpl::variable<bool> &dividerOverridden) {
+	DetailsFiller filler(
+		controller,
+		parent,
+		sublist,
+		mainTracker,
+		dividerOverridden);
 	return filler.fill();
 }
 
 object_ptr<Ui::RpWidget> SetupDetails(
 		not_null<Controller*> controller,
 		not_null<Ui::RpWidget*> parent,
-		not_null<Data::ForumTopic*> topic) {
-	DetailsFiller filler(controller, parent, topic);
+		not_null<Data::ForumTopic*> topic,
+		Ui::MultiSlideTracker &mainTracker,
+		rpl::variable<bool> &dividerOverridden) {
+	DetailsFiller filler(
+		controller,
+		parent,
+		topic,
+		mainTracker,
+		dividerOverridden);
 	return filler.fill();
 }
 
@@ -2840,20 +2963,6 @@ object_ptr<Ui::RpWidget> SetupChannelMembersAndManage(
 			st::infoChannelAdminsIconPosition);
 	}
 
-	if (EditPeerInfoBox::Available(channel)) {
-		const auto sessionController = controller->parentController();
-		const auto button = AddActionButton(
-			result->entity(),
-			tr::lng_profile_manage(),
-			rpl::single(true),
-			[=] { sessionController->showEditPeerBox(channel); },
-			nullptr);
-		object_ptr<FloatingIcon>(
-			button,
-			st::menuIconManage,
-			st::infoChannelAdminsIconPosition);
-	}
-
 	result->setDuration(st::infoSlideDuration)->toggleOn(
 		rpl::combine(
 			std::move(membersShown),
@@ -2898,13 +3007,34 @@ void AddDetails(
 		not_null<PeerData*> peer,
 		Data::ForumTopic *topic,
 		Data::SavedSublist *sublist,
-		Origin origin) {
+		Origin origin,
+		Ui::MultiSlideTracker &mainTracker,
+		rpl::variable<bool> &dividerOverridden) {
 	if (topic) {
-		container->add(SetupDetails(controller, container, topic));
+		container->add(
+			SetupDetails(
+				controller,
+				container,
+				topic,
+				mainTracker,
+				dividerOverridden));
 	} else if (sublist) {
-		container->add(SetupDetails(controller, container, sublist));
+		container->add(
+			SetupDetails(
+				controller,
+				container,
+				sublist,
+				mainTracker,
+				dividerOverridden));
 	} else {
-		container->add(SetupDetails(controller, container, peer, origin));
+		container->add(
+			SetupDetails(
+				controller,
+				container,
+				peer,
+				origin,
+				mainTracker,
+				dividerOverridden));
 	}
 }
 

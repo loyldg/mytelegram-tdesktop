@@ -1631,6 +1631,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_delete_note" = "Delete Note";
 "lng_info_bio_label" = "Bio";
 "lng_info_link_label" = "Link";
+"lng_info_link_topic_label" = "This topic link will only work for group members";
 "lng_info_location_label" = "Location";
 "lng_info_about_label" = "Description";
 "lng_info_work_open" = "Open";
@@ -1693,6 +1694,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_profile_action_short_report" = "Report";
 "lng_profile_action_short_leave" = "Leave";
 "lng_profile_action_short_more" = "More";
+"lng_profile_action_short_manage" = "Manage";
 
 "lng_media_type_photos" = "Photos";
 "lng_media_type_gifs" = "GIFs";
@@ -3379,6 +3381,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_feature_custom_emoji_pack" = "Custom Emoji Pack";
 "lng_feature_transcribe" = "Voice-to-Text Conversion";
 "lng_feature_autotranslate" = "Autotranslation of Messages";
+"lng_feature_profile_color_channel#one" = "**{count}** Color for Channel Cover";
+"lng_feature_profile_color_channel#other" = "**{count}** Colors for Channel Cover";
+"lng_feature_profile_color_group#one" = "**{count}** Color for Group Cover";
+"lng_feature_profile_color_group#other" = "**{count}** Colors for Group Cover";
+"lng_feature_profile_icon_channel" = "Custom Logo for Channel Cover";
+"lng_feature_profile_icon_group" = "Custom Logo for Group Cover";
 
 "lng_edit_topics_enable" = "Enable Topics";
 "lng_edit_topics_about" = "The group chat will be divided into topics created by admins or users.";
@@ -4571,6 +4579,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_add_tag_selector#other" = "You can add a tag to the messages";
 "lng_message_tagged_with" = "Message tagged with {emoji}";
 "lng_tagged_view_saved" = "View";
+
+"lng_add_channel_to_filter_selector" = "You can add a channel to your folder";
+"lng_add_group_to_filter_selector" = "You can add a group to your folder";
 
 "lng_context_animated_emoji" = "This message contains emoji from **{name} pack**.";
 "lng_context_animated_emoji_many#one" = "This message contains emoji from **{count} pack**.";

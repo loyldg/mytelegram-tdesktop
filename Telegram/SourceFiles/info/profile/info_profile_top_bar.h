@@ -82,6 +82,8 @@ namespace Info::Profile {
 class Badge;
 class StatusLabel;
 
+struct TopBarActionButtonStyle;
+
 class TopBar final : public Ui::RpWidget {
 public:
 	enum class Source {
@@ -96,7 +98,7 @@ public:
 		rpl::producer<Wrap> wrap;
 		Source source = Source::Profile;
 		PeerData *peer = nullptr;
-		rpl::variable<bool> backToggles;
+		rpl::producer<bool> backToggles;
 		rpl::producer<> showFinished;
 	};
 
@@ -109,6 +111,8 @@ public:
 
 	TopBar(not_null<Ui::RpWidget*> parent, Descriptor descriptor);
 	~TopBar();
+
+	[[nodiscard]] rpl::producer<> backRequest() const;
 
 	void setOnlineCount(rpl::producer<int> &&count);
 
@@ -186,6 +190,10 @@ private:
 	void updateStatusPosition(float64 progressCurrent);
 	[[nodiscard]] const style::FlatLabel &statusStyle() const;
 	void setupStatusWithRating();
+	[[nodiscard]] TopBarActionButtonStyle mapActionStyle(
+		std::optional<QColor> c) const;
+
+	[[nodiscard]] rpl::producer<QString> nameValue() const;
 
 	[[nodiscard]] auto effectiveColorProfile()
 	const -> std::optional<Data::ColorProfileSet>;
@@ -219,6 +227,7 @@ private:
 	std::unique_ptr<StatusLabel> _statusLabel;
 	rpl::variable<int> _statusShift = 0;
 	object_ptr<Ui::RoundButton> _showLastSeen = { nullptr };
+	object_ptr<Ui::RoundButton> _forumButton = { nullptr };
 	QGraphicsOpacityEffect *_showLastSeenOpacity = nullptr;
 
 	std::shared_ptr<style::FlatLabel> _statusSt;
@@ -249,6 +258,8 @@ private:
 
 	base::unique_qptr<Ui::IconButton> _close;
 	base::unique_qptr<Ui::FadeWrap<Ui::IconButton>> _back;
+
+	rpl::event_stream<> _backClicks;
 
 	base::unique_qptr<Ui::IconButton> _topBarButton;
 	base::unique_qptr<Ui::PopupMenu> _peerMenu;

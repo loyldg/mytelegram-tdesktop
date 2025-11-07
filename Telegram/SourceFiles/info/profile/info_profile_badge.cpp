@@ -105,7 +105,10 @@ void Badge::setContent(Content content) {
 				Data::EmojiStatusCustomId(id),
 				[raw = _view.data()] { raw->update(); },
 				sizeTag());
-			if (_customStatusLoopsLimit > 0) {
+			if (_content.badge == BadgeType::BotVerified) {
+				_emojiStatus = std::make_unique<Ui::Text::FirstFrameEmoji>(
+					std::move(_emojiStatus));
+			} else if (_customStatusLoopsLimit > 0) {
 				_emojiStatus = std::make_unique<Ui::Text::LimitedLoopsEmoji>(
 					std::move(_emojiStatus),
 					_customStatusLoopsLimit);
@@ -131,7 +134,7 @@ void Badge::setContent(Content content) {
 			}
 			if (icon) {
 				auto p = Painter(check);
-				if (_overrideSt) {
+				if (_overrideSt && !iconForeground) {
 					icon->paint(
 						p,
 						emoji,
@@ -142,7 +145,16 @@ void Badge::setContent(Content content) {
 					icon->paint(p, emoji, 0, check->width());
 				}
 				if (iconForeground) {
-					iconForeground->paint(p, emoji, 0, check->width());
+					if (_overrideSt) {
+						iconForeground->paint(
+							p,
+							emoji,
+							0,
+							check->width(),
+							_overrideSt->premiumFg->c);
+					} else {
+						iconForeground->paint(p, emoji, 0, check->width());
+					}
 				}
 			}
 		}, _view->lifetime());
