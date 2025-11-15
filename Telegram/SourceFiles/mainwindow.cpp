@@ -151,6 +151,8 @@ void MainWindow::finishFirstShow() {
 
 	if (!_passcodeLock && _main) {
 		_main->activate();
+	} else if (!_passcodeLock && _intro) {
+		_intro->setInnerFocus();
 	}
 }
 
@@ -215,7 +217,7 @@ void MainWindow::clearPasscodeLock() {
 		_main->show();
 		updateControlsGeometry();
 		_main->showAnimated(std::move(oldContentCache), true);
-		Core::App().checkStartUrl();
+		Core::App().checkStartUrls();
 	}
 }
 
@@ -285,7 +287,7 @@ void MainWindow::setupMain(
 		} else {
 			_main->activate();
 		}
-		Core::App().checkStartUrl();
+		Core::App().checkStartUrls();
 	}
 	fixOrder();
 	if (const auto strong = weakAnimatedLayer.get()) {

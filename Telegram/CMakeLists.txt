@@ -363,6 +363,14 @@ PRIVATE
     calls/group/calls_group_members_row.h
     calls/group/calls_group_menu.cpp
     calls/group/calls_group_menu.h
+    calls/group/calls_group_message_encryption.cpp
+    calls/group/calls_group_message_encryption.h
+    calls/group/calls_group_message_field.cpp
+    calls/group/calls_group_message_field.h
+    calls/group/calls_group_messages.cpp
+    calls/group/calls_group_messages.h
+    calls/group/calls_group_messages_ui.cpp
+    calls/group/calls_group_messages_ui.h
     calls/group/calls_group_panel.cpp
     calls/group/calls_group_panel.h
     calls/group/calls_group_rtmp.cpp
@@ -775,6 +783,8 @@ PRIVATE
     history/view/controls/history_view_voice_record_bar.h
     history/view/controls/history_view_webpage_processor.cpp
     history/view/controls/history_view_webpage_processor.h
+    history/view/media/history_view_birthday_suggestion.cpp
+    history/view/media/history_view_birthday_suggestion.h
     history/view/media/history_view_call.cpp
     history/view/media/history_view_call.h
     history/view/media/history_view_contact.cpp
@@ -908,6 +918,8 @@ PRIVATE
     history/view/history_view_schedule_box.h
     history/view/history_view_scheduled_section.cpp
     history/view/history_view_scheduled_section.h
+    history/view/history_view_self_forwards_tagger.cpp
+    history/view/history_view_self_forwards_tagger.h
     history/view/history_view_send_action.cpp
     history/view/history_view_send_action.h
     history/view/history_view_service_message.cpp
@@ -952,6 +964,8 @@ PRIVATE
     history/history_inner_widget.h
     history/history_location_manager.cpp
     history/history_location_manager.h
+    history/history_streamed_drafts.cpp
+    history/history_streamed_drafts.h
     history/history_translation.cpp
     history/history_translation.h
     history/history_unread_things.cpp
@@ -1030,6 +1044,8 @@ PRIVATE
     info/polls/info_polls_results_widget.h
     info/profile/info_profile_actions.cpp
     info/profile/info_profile_actions.h
+    info/profile/info_profile_badge_tooltip.cpp
+    info/profile/info_profile_badge_tooltip.h
     info/profile/info_profile_badge.cpp
     info/profile/info_profile_badge.h
     info/profile/info_profile_cover.cpp
@@ -1044,8 +1060,10 @@ PRIVATE
     info/profile/info_profile_members_controllers.h
     info/profile/info_profile_phone_menu.cpp
     info/profile/info_profile_phone_menu.h
-    info/profile/info_profile_text.cpp
-    info/profile/info_profile_text.h
+    info/profile/info_profile_status_label.cpp
+    info/profile/info_profile_status_label.h
+    info/profile/info_profile_top_bar.cpp
+    info/profile/info_profile_top_bar.h
     info/profile/info_profile_values.cpp
     info/profile/info_profile_values.h
     info/profile/info_profile_widget.cpp
@@ -1054,6 +1072,7 @@ PRIVATE
     info/reactions_list/info_reactions_list_widget.h
     info/requests_list/info_requests_list_widget.cpp
     info/requests_list/info_requests_list_widget.h
+    info/saved/info_saved_music_common.cpp
     info/saved/info_saved_music_common.h
     info/saved/info_saved_music_provider.cpp
     info/saved/info_saved_music_provider.h
@@ -1655,8 +1674,12 @@ PRIVATE
     ui/item_text_options.cpp
     ui/item_text_options.h
     ui/resize_area.h
+    ui/top_background_gradient.cpp
+    ui/top_background_gradient.h
     ui/unread_badge.cpp
     ui/unread_badge.h
+    ui/peer/video_userpic_player.cpp
+    ui/peer/video_userpic_player.h
     window/main_window.cpp
     window/main_window.h
     window/notifications_manager.cpp

@@ -92,7 +92,7 @@ starIconEmojiLarge: IconEmoji {
 
 tonIconEmoji: IconEmoji {
 	icon: icon{{ "chat/mini_ton_bold", currencyFg }};
-	padding: margins(1px, 3px, 1px, 0px);
+	padding: margins(1px, 2px, 1px, 0px);
 }
 tonIconEmojiLarge: IconEmoji {
 	icon: icon{{ "payments/ton_emoji-18x18", currencyFg }};
@@ -249,6 +249,11 @@ giftBoxPinIcon: icon {{ "dialogs/dialogs_pinned", premiumButtonFg }};
 giftBoxLockIcon: icon{{ "limits/mini_gift_lock-18x18", attentionButtonFg }};
 giftBoxLockIconPosition: point(4px, 4px);
 
+giftBoxGiftEmptyLabel: FlatLabel(defaultFlatLabel) {
+	minWidth: 156px;
+	align: align(top);
+}
+
 creditsHistoryEntriesList: PeerList(defaultPeerList) {
 	padding: margins(0px, 7px, 0px, 7px);
 	item: PeerListItem(defaultPeerListItem) {
@@ -304,6 +309,9 @@ uniqueMenuButton: IconButton(uniqueCloseButton) {
 }
 upgradeGiftBox: Box(giftBox) {
 	buttonPadding: margins(22px, 3px, 22px, 22px);
+}
+upgradeGiftWithPricesBox: Box(giftBox) {
+	buttonPadding: margins(22px, 3px, 22px, 46px);
 }
 upgradeGiftSubtext: FlatLabel(boxDividerLabel) {
 	minWidth: 200px;
@@ -361,6 +369,14 @@ resaleButtonSubtitle: FlatLabel(defaultFlatLabel) {
 	textFg: activeButtonFg;
 	maxHeight: 20px;
 }
+resalePriceTableLink: FlatLabel(defaultFlatLabel) {
+	minWidth: 200px;
+	align: align(top);
+}
+resalePriceAbout: FlatLabel(boxLabel) {
+	textFg: windowSubTextFg;
+	align: align(top);
+}
 
 resaleConfirmTonOnly: FlatLabel(boxLabel) {
 	textFg: windowSubTextFg;
@@ -384,3 +400,40 @@ uniqueGiftValueAvailableLink: FlatLabel(boxLabel) {
 	}
 }
 uniqueGiftValueAvailableMargin: margins(0px, 4px, 0px, 4px);
+
+videoStreamTopupRipple: RippleAnimation(defaultRippleAnimation) {
+	color: groupCallMembersBgRipple;
+}
+videoStreamTopupButton: SettingsButton(creditsTopupButton) {
+	textFg: groupCallMemberNotJoinedStatus;
+	textFgOver: groupCallMemberNotJoinedStatus;
+	textBg: groupCallMembersBg;
+	textBgOver: groupCallMembersBgOver;
+	ripple: videoStreamTopupRipple;
+}
+videoStreamTopupPrice: FlatLabel(creditsTopupPrice) {
+	textFg: groupCallMemberNotJoinedStatus;
+}
+videoStreamShowMoreButton: SettingsButton(defaultSettingsButton) {
+	textFg: groupCallActiveFg;
+	textFgOver: groupCallActiveFg;
+	textBg: groupCallMembersBg;
+	textBgOver: groupCallMembersBgOver;
+
+	padding: margins(70px, 10px, 22px, 8px);
+
+	ripple: videoStreamTopupRipple;
+}
+videoStreamStarsCover: PremiumCover(creditsLowBalancePremiumCover) {
+	bg: groupCallMembersBg;
+	titleFg: groupCallMembersFg;
+	about: FlatLabel(defaultFlatLabel) {
+		style: premiumAboutTextStyle;
+		palette: TextPalette(defaultTextPalette) {
+			linkFg: groupCallMembersFg;
+		}
+		align: align(top);
+		textFg: groupCallMembersFg;
+		minWidth: 190px;
+	}
+}

@@ -537,7 +537,6 @@ changePhoneDescription: FlatLabel(defaultFlatLabel) {
 }
 changePhoneDescriptionPadding: margins(0px, 1px, 0px, 8px);
 changePhoneIconPadding: margins(0px, 39px, 0px, 5px);
-changePhoneIconSize: 120px;
 changePhoneLabel: FlatLabel(defaultFlatLabel) {
 	minWidth: 275px;
 	textFg: windowSubTextFg;
@@ -545,6 +544,8 @@ changePhoneLabel: FlatLabel(defaultFlatLabel) {
 changePhoneError: FlatLabel(changePhoneLabel) {
 	textFg: boxTextFgError;
 }
+
+normalBoxLottieSize: size(120px, 120px);
 
 adminLogFilterUserpicLeft: 15px;
 adminLogFilterLittleSkip: 16px;
@@ -754,6 +755,12 @@ createPollFieldTitlePadding: margins(22px, 7px, 10px, 6px);
 
 sendGifWithCaptionEmojiPosition: point(-30px, 23px);
 
+notesFieldWithEmoji: InputField(defaultInputField) {
+	textMargins: margins(0px, 28px, 30px, 4px);
+//	border: 0px;
+//	borderActive: 0px;
+}
+
 backgroundCheckbox: Checkbox(defaultCheckbox) {
 	textFg: msgServiceFg;
 	textFgActive: msgServiceFg;
@@ -807,6 +814,7 @@ urlAuthCheckbox: Checkbox(defaultBoxCheckbox) {
 
 addContactFieldMargin: margins(19px, 0px, 19px, 10px);
 addContactWarningMargin: margins(19px, 10px, 19px, 5px);
+editContactSuggestBirthday: icon{{ "settings/birthday_add-22x22", lightButtonFg }};
 blockUserConfirmation: FlatLabel(boxLabel) {
 	minWidth: 240px;
 }

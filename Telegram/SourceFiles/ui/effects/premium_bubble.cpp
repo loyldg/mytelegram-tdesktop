@@ -11,6 +11,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/object_ptr.h"
 #include "lang/lang_keys.h"
 #include "ui/effects/gradient.h"
+#include "ui/effects/ministar_particles.h"
 #include "ui/effects/premium_graphics.h"
 #include "ui/wrap/padding_wrap.h"
 #include "ui/wrap/vertical_layout.h"
@@ -117,6 +118,21 @@ int Bubble::countMaxWidth(int maxPossibleCounter) const {
 				+ _st.additionalStyle.font->width(textsMax.additional)));
 }
 
+int Bubble::countTargetWidth(int targetCounter) const {
+	auto numbers = Ui::NumbersAnimation(_st.font, [] {});
+	numbers.setDisabledMonospace(true);
+	numbers.setDuration(0);
+	const auto texts = _textFactory(targetCounter);
+	numbers.setText(texts.counter, targetCounter);
+	numbers.finishAnimating();
+	return filledWidth()
+		+ numbers.maxWidth()
+		+ (_additional.isEmpty()
+			? 0
+			: (_st.additionalSkip
+				+ _st.additionalStyle.font->width(texts.additional)));
+}
+
 void Bubble::setCounter(int value) {
 	if (_counter != value) {
 		_counter = value;
@@ -136,53 +152,72 @@ void Bubble::setFlipHorizontal(bool value) {
 	_flipHorizontal = value;
 }
 
+QRect Bubble::bubbleGeometry(const QRect &r) const {
+	const auto penWidth = _st.penWidth;
+	const auto penWidthHalf = penWidth / 2;
+	return r - style::margins(
+		penWidthHalf,
+		penWidthHalf,
+		penWidthHalf,
+		_st.tailSize.height() + penWidthHalf);
+}
+
+QPainterPath Bubble::bubblePath(const QRect &r) const {
+	const auto bubbleRect = bubbleGeometry(r);
+	const auto radius = bubbleRadius();
+	auto pathTail = QPainterPath();
+
+	const auto tailWHalf = _st.tailSize.width() / 2.;
+	const auto progress = _tailEdge;
+
+	const auto tailTop = bubbleRect.y() + bubbleRect.height();
+	const auto tailLeftFull = bubbleRect.x()
+		+ (bubbleRect.width() * 0.5)
+		- tailWHalf;
+	const auto tailLeft = bubbleRect.x()
+		+ (bubbleRect.width() * 0.5 * (progress + 1.))
+		- tailWHalf;
+	const auto tailCenter = tailLeft + tailWHalf;
+	const auto tailRight = [&] {
+		const auto max = bubbleRect.x() + bubbleRect.width();
+		const auto right = tailLeft + _st.tailSize.width();
+		const auto bottomMax = max - radius;
+		return (right > bottomMax)
+			? std::max(float64(tailCenter), float64(bottomMax))
+			: right;
+	}();
+	if (_hasTail) {
+		pathTail.moveTo(tailLeftFull, tailTop);
+		pathTail.lineTo(tailLeft, tailTop);
+		pathTail.lineTo(tailCenter, tailTop + _st.tailSize.height());
+		pathTail.lineTo(tailRight, tailTop);
+		pathTail.lineTo(tailRight, tailTop - radius);
+		pathTail.moveTo(tailLeftFull, tailTop);
+	}
+	auto pathBubble = QPainterPath();
+	pathBubble.setFillRule(Qt::WindingFill);
+	pathBubble.addRoundedRect(bubbleRect, radius, radius);
+
+	auto result = pathTail + pathBubble;
+	if (_flipHorizontal) {
+		auto m = QTransform();
+		const auto center = QRectF(bubbleRect).center();
+		m.translate(center.x(), center.y());
+		m.scale(-1., 1.);
+		m.translate(-center.x(), -center.y());
+		return m.map(result);
+	}
+	return result;
+}
+
 void Bubble::paintBubble(QPainter &p, const QRect &r, const QBrush &brush) {
 	if (!_counter.has_value()) {
 		return;
 	}
 
+	const auto bubbleRect = bubbleGeometry(r);
 	const auto penWidth = _st.penWidth;
-	const auto penWidthHalf = penWidth / 2;
-	const auto bubbleRect = r - style::margins(
-		penWidthHalf,
-		penWidthHalf,
-		penWidthHalf,
-		_st.tailSize.height() + penWidthHalf);
 	{
-		const auto radius = bubbleRadius();
-		auto pathTail = QPainterPath();
-
-		const auto tailWHalf = _st.tailSize.width() / 2.;
-		const auto progress = _tailEdge;
-
-		const auto tailTop = bubbleRect.y() + bubbleRect.height();
-		const auto tailLeftFull = bubbleRect.x()
-			+ (bubbleRect.width() * 0.5)
-			- tailWHalf;
-		const auto tailLeft = bubbleRect.x()
-			+ (bubbleRect.width() * 0.5 * (progress + 1.))
-			- tailWHalf;
-		const auto tailCenter = tailLeft + tailWHalf;
-		const auto tailRight = [&] {
-			const auto max = bubbleRect.x() + bubbleRect.width();
-			const auto right = tailLeft + _st.tailSize.width();
-			const auto bottomMax = max - radius;
-			return (right > bottomMax)
-				? std::max(float64(tailCenter), float64(bottomMax))
-				: right;
-		}();
-		if (_hasTail) {
-			pathTail.moveTo(tailLeftFull, tailTop);
-			pathTail.lineTo(tailLeft, tailTop);
-			pathTail.lineTo(tailCenter, tailTop + _st.tailSize.height());
-			pathTail.lineTo(tailRight, tailTop);
-			pathTail.lineTo(tailRight, tailTop - radius);
-			pathTail.moveTo(tailLeftFull, tailTop);
-		}
-		auto pathBubble = QPainterPath();
-		pathBubble.setFillRule(Qt::WindingFill);
-		pathBubble.addRoundedRect(bubbleRect, radius, radius);
-
 		auto hq = PainterHighQualityEnabler(p);
 		p.setPen(QPen(
 			brush,
@@ -191,16 +226,7 @@ void Bubble::paintBubble(QPainter &p, const QRect &r, const QBrush &brush) {
 			Qt::RoundCap,
 			Qt::RoundJoin));
 		p.setBrush(brush);
-		if (_flipHorizontal) {
-			auto m = QTransform();
-			const auto center = QRectF(bubbleRect).center();
-			m.translate(center.x(), center.y());
-			m.scale(-1., 1.);
-			m.translate(-center.x(), -center.y());
-			p.drawPath(m.map(pathTail + pathBubble));
-		} else {
-			p.drawPath(pathTail + pathBubble);
-		}
+		p.drawPath(bubblePath(r));
 	}
 	p.setPen(st::activeButtonFg);
 	p.setFont(_st.font);
@@ -253,6 +279,9 @@ BubbleWidget::BubbleWidget(
 , _deflection(kDeflection)
 , _stepBeforeDeflection(kStepBeforeDeflection)
 , _stepAfterDeflection(kStepAfterDeflection) {
+	if (_type == BubbleType::Credits) {
+		setupParticles(parent);
+	}
 	const auto resizeTo = [=](int w, int h) {
 		_deflection = (w > _st.widthLimit)
 			? kDeflectionSmall
@@ -288,13 +317,72 @@ BubbleWidget::BubbleWidget(
 	}, lifetime());
 }
 
+void BubbleWidget::setupParticles(not_null<Ui::RpWidget*> parent) {
+	_particles.emplace(StarParticles::Type::Radial, 50, st::lineWidth * 4);
+	_particles->setSpeed(0.1);
+
+	_particlesWidget = Ui::CreateChild<Ui::RpWidget>(parent);
+	_particlesWidget->setAttribute(Qt::WA_TransparentForMouseEvents);
+	_particlesWidget->show();
+	_particlesWidget->raise();
+
+	_particlesAnimation.init([=] { _particlesWidget->update(); });
+
+	_particlesWidget->paintRequest() | rpl::start_with_next([=] {
+		if (!_particlesAnimation.animating()) {
+			_particlesAnimation.start();
+		}
+		auto p = QPainter(_particlesWidget);
+		auto hq = PainterHighQualityEnabler(p);
+
+		const auto offset = QPoint(
+			(_particlesWidget->width() - width()) / 2,
+			(_particlesWidget->height() - height()) / 2);
+		const auto bubbleRect = rect().translated(offset)
+			- QMargins(
+				_spaceForDeflection.width(),
+				_spaceForDeflection.height(),
+				_spaceForDeflection.width(),
+				_spaceForDeflection.height());
+
+		p.save();
+		p.translate(offset);
+		const auto bubblePath = _bubble.bubblePath(bubbleRect);
+		p.restore();
+
+		auto fullRect = QPainterPath();
+		fullRect.addRect(QRectF(_particlesWidget->rect()));
+
+		p.setClipPath(bubblePath);
+		_particles->setColor(st::premiumButtonFg->c);
+		_particles->paint(p, _particlesWidget->rect(), crl::now());
+		p.setClipping(false);
+
+		p.setClipPath(fullRect.subtracted(bubblePath));
+		_particles->setColor(st::creditsBg3->c);
+		_particles->paint(p, _particlesWidget->rect(), crl::now());
+	}, _particlesWidget->lifetime());
+
+	geometryValue() | rpl::start_with_next([=](QRect geometry) {
+		const auto particlesSize = QSize(
+			int(geometry.width() * 1.5),
+			int(geometry.height() * 1.5));
+		const auto center = geometry.center();
+		_particlesWidget->setGeometry(
+			center.x() - particlesSize.width() / 2,
+			center.y() - particlesSize.height() / 2,
+			particlesSize.width(),
+			particlesSize.height());
+	}, lifetime());
+}
+
 void BubbleWidget::animateTo(BubbleRowState state) {
-	_maxBubbleWidth = _bubble.countMaxWidth(state.counter);
+	const auto targetWidth = _bubble.countTargetWidth(state.counter);
 	const auto parent = parentWidget();
 	const auto available = parent->width()
 		- _outerPadding.left()
 		- _outerPadding.right();
-	const auto halfWidth = (_maxBubbleWidth / 2);
+	const auto halfWidth = (targetWidth / 2);
 	const auto computeLeft = [=](float64 pointRatio, float64 animProgress) {
 		const auto delta = (pointRatio - _animatingFromResultRatio);
 		const auto center = available
@@ -303,9 +391,7 @@ void BubbleWidget::animateTo(BubbleRowState state) {
 	};
 	const auto moveEndPoint = state.ratio;
 	const auto computeRightEdge = [=] {
-		return parent->width()
-			- _outerPadding.right()
-			- _maxBubbleWidth;
+		return parent->width() - _outerPadding.right() - targetWidth;
 	};
 	struct Edge final {
 		float64 goodPointRatio = 0.;
@@ -386,6 +472,11 @@ void BubbleWidget::animateTo(BubbleRowState state) {
 			+ counterProgress * (state.counter - _animatingFrom.counter);
 		_bubble.setCounter(int(base::SafeRound(now)));
 
+		if (_particles) {
+			const auto progress = now / float(state.counter);
+			_particles->setSpeed(0.01 + progress * 0.25);
+		}
+
 		_bubble.setFlipHorizontal(nowBubbleEdge < 0);
 		_bubble.setTailEdge(std::abs(nowBubbleEdge));
 		update();
@@ -456,6 +547,7 @@ void BubbleWidget::paintEvent(QPaintEvent *e) {
 	_bubble.paintBubble(p, bubbleRect, [&] {
 		switch (_type) {
 		case BubbleType::NoPremium:
+		case BubbleType::UpgradePrice:
 		case BubbleType::StarRating: return st::windowBgActive->b;
 		case BubbleType::NegativeRating: return st::attentionButtonFg->b;
 		case BubbleType::Premium: return QBrush(_cachedGradient);
@@ -463,6 +555,10 @@ void BubbleWidget::paintEvent(QPaintEvent *e) {
 		}
 		Unexpected("Type in Premium::BubbleWidget.");
 	}());
+}
+
+void BubbleWidget::resizeEvent(QResizeEvent *e) {
+	RpWidget::resizeEvent(e);
 }
 
 void AddBubbleRow(
