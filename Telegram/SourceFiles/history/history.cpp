@@ -68,6 +68,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/text/text_options.h"
 #include "ui/text/text_utilities.h"
 #include "ui/toast/toast.h"
+#include "ui/painter.h" // remove when History::paintUserpic accepts QPainter
 #include "payments/payments_checkout_process.h"
 #include "core/crash_reports.h"
 #include "core/application.h"
@@ -243,7 +244,7 @@ void History::createLocalDraftFromCloud(
 	draft->reply.topicRootId = topicRootId;
 	draft->reply.monoforumPeerId = monoforumPeerId;
 	if (!suggestDraftAllowed()) {
-		draft->suggest = SuggestPostOptions();
+		draft->suggest = SuggestOptions();
 	}
 	auto existing = localDraft(topicRootId, monoforumPeerId);
 	if (Data::DraftIsNull(existing)
@@ -333,7 +334,7 @@ Data::Draft *History::createCloudDraft(
 				.topicRootId = topicRootId,
 				.monoforumPeerId = monoforumPeerId,
 			},
-			SuggestPostOptions(),
+			SuggestOptions(),
 			MessageCursor(),
 			Data::WebPageDraft()));
 		cloudDraft(topicRootId, monoforumPeerId)->date = TimeId(0);
@@ -361,7 +362,7 @@ Data::Draft *History::createCloudDraft(
 		existing->reply.topicRootId = topicRootId;
 		existing->reply.monoforumPeerId = monoforumPeerId;
 		if (!suggestDraftAllowed()) {
-			existing->suggest = SuggestPostOptions();
+			existing->suggest = SuggestOptions();
 		}
 	}
 
@@ -752,7 +753,7 @@ not_null<HistoryItem*> History::addNewItem(
 	}
 
 	if (const auto sublist = item->savedSublist()) {
-		sublist->applyMaybeLast(item, unread);
+		sublist->applyMaybeLast(item);
 	}
 
 	return item;
@@ -1372,6 +1373,13 @@ void History::applyServiceChanges(
 					todolist->apply(data);
 				}
 			}
+		}
+	}, [&](const MTPDmessageActionStarGift &data) {
+		if (data.is_auction_acquired() && data.vto_id()) {
+			const auto to = peer->owner().peer(peerFromMTP(*data.vto_id()));
+			data.vgift().match([&](const MTPDstarGift &data) {
+				peer->owner().notifyGiftAuctionGot({ data.vid().v, to });
+			}, [](const auto &) {});
 		}
 	}, [](const auto &) {
 	});
@@ -3421,12 +3429,12 @@ void History::forumChanged(Data::Forum *old) {
 			return (_flags & Flag::IsForum) && inChatList();
 		}) | rpl::map(
 			AdjustedForumUnreadState
-		) | rpl::start_with_next([=](const Dialogs::UnreadState &old) {
+		) | rpl::on_next([=](const Dialogs::UnreadState &old) {
 			notifyUnreadStateChange(old);
 		}, forum->lifetime());
 
 		forum->chatsListChanges(
-		) | rpl::start_with_next([=] {
+		) | rpl::on_next([=] {
 			updateChatListEntry();
 		}, forum->lifetime());
 	} else {
@@ -3458,12 +3466,12 @@ void History::monoforumChanged(Data::SavedMessages *old) {
 			return (_flags & Flag::IsMonoforumAdmin) && inChatList();
 		}) | rpl::map([=](const Dialogs::UnreadState &was) {
 			return AdjustedForumUnreadState(withMyMuted(was));
-		}) | rpl::start_with_next([=](const Dialogs::UnreadState &old) {
+		}) | rpl::on_next([=](const Dialogs::UnreadState &old) {
 			notifyUnreadStateChange(old);
 		}, monoforum->lifetime());
 
 		monoforum->chatsListChanges(
-		) | rpl::start_with_next([=] {
+		) | rpl::on_next([=] {
 			updateChatListEntry();
 		}, monoforum->lifetime());
 	} else {

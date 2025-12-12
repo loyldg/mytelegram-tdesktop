@@ -103,6 +103,7 @@ struct GiftWearBoxStyleOverride {
 	const style::FlatLabel *title = nullptr;
 	const style::FlatLabel *subtitle = nullptr;
 	const style::icon *radiantIcon = nullptr;
+	const style::icon *profileIcon = nullptr;
 	const style::icon *proofIcon = nullptr;
 	const style::FlatLabel *infoTitle = nullptr;
 	const style::FlatLabel *infoAbout = nullptr;
@@ -127,6 +128,7 @@ struct CreditsEntryBoxStyleOverrides {
 	const style::icon *hide = nullptr;
 	const style::icon *pin = nullptr;
 	const style::icon *unpin = nullptr;
+	const style::icon *offer = nullptr;
 	std::shared_ptr<ShareBoxStyleOverrides> shareBox;
 	std::shared_ptr<GiftWearBoxStyleOverride> giftWearBox;
 };
@@ -234,6 +236,9 @@ struct SmallBalanceBot {
 struct SmallBalanceReaction {
 	ChannelId channelId = 0;
 };
+struct SmallBalanceVideoStream {
+	PeerId streamerId = 0;
+};
 struct SmallBalanceSubscription {
 	QString name;
 };
@@ -249,16 +254,20 @@ struct SmallBalanceForMessage {
 struct SmallBalanceForSuggest {
 	PeerId recipientId;
 };
+struct SmallBalanceForOffer {
+};
 struct SmallBalanceForSearch {
 };
 struct SmallBalanceSource : std::variant<
 	SmallBalanceBot,
 	SmallBalanceReaction,
+	SmallBalanceVideoStream,
 	SmallBalanceSubscription,
 	SmallBalanceDeepLink,
 	SmallBalanceStarGift,
 	SmallBalanceForMessage,
 	SmallBalanceForSuggest,
+	SmallBalanceForOffer,
 	SmallBalanceForSearch> {
 	using variant::variant;
 };

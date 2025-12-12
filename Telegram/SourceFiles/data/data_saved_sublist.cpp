@@ -145,13 +145,13 @@ rpl::producer<MessagesSlice> SavedSublist::source(
 		history->session().changes().historyUpdates(
 			history,
 			HistoryUpdate::Flag::ClientSideMessages
-		) | rpl::start_with_next(pushDelayed, lifetime);
+		) | rpl::on_next(pushDelayed, lifetime);
 
 		_listChanges.events(
-		) | rpl::start_with_next(pushDelayed, lifetime);
+		) | rpl::on_next(pushDelayed, lifetime);
 
 		_instantChanges.events(
-		) | rpl::start_with_next(pushInstant, lifetime);
+		) | rpl::on_next(pushInstant, lifetime);
 
 		pushInstant();
 		return lifetime;
@@ -187,12 +187,13 @@ rpl::producer<> SavedSublist::destroyed() const {
 		) | rpl::to_empty);
 }
 
-void SavedSublist::applyMaybeLast(not_null<HistoryItem*> item, bool added) {
-	growLastKnownServerMessageId(item->id);
+void SavedSublist::applyMaybeLast(not_null<HistoryItem*> item) {
 	if (!_lastServerMessage.value_or(nullptr)
 		|| (*_lastServerMessage)->id < item->id) {
 		setLastServerMessage(item);
 		resolveChatListMessageGroup();
+	} else {
+		growLastKnownServerMessageId(item->id);
 	}
 }
 
@@ -706,7 +707,7 @@ void SavedSublist::subscribeToUnreadChanges() {
 	) | rpl::combine_previous(
 	) | rpl::filter([=] {
 		return inChatList();
-	}) | rpl::start_with_next([=](
+	}) | rpl::on_next([=](
 			std::optional<int> previous,
 			std::optional<int> now) {
 		if (previous.value_or(0) != now.value_or(0)) {

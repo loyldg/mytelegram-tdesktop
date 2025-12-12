@@ -19,8 +19,13 @@ class Image;
 class HistoryItem;
 struct WebPageCollage;
 struct WebPageStickerSet;
+struct WebPageAuction;
 enum class WebPageType : uint8;
 enum class NewMessageType;
+
+namespace Calls {
+class GroupCall;
+} // namespace Calls
 
 namespace HistoryView {
 struct Group;
@@ -110,6 +115,10 @@ struct GiftsUpdate {
 	int collectionId = 0;
 	std::vector<Data::SavedStarGiftId> added;
 	std::vector<Data::SavedStarGiftId> removed;
+};
+struct GiftAuctionGot {
+	uint64 giftId = 0;
+	not_null<PeerData*> to;
 };
 
 struct SentToScheduled {
@@ -357,6 +366,8 @@ public:
 	[[nodiscard]] rpl::producer<GiftUpdate> giftUpdates() const;
 	void notifyGiftsUpdate(GiftsUpdate &&update);
 	[[nodiscard]] rpl::producer<GiftsUpdate> giftsUpdates() const;
+	void notifyGiftAuctionGot(GiftAuctionGot &&update);
+	[[nodiscard]] rpl::producer<GiftAuctionGot> giftAuctionGots() const;
 	void requestItemRepaint(not_null<const HistoryItem*> item);
 	[[nodiscard]] rpl::producer<not_null<const HistoryItem*>> itemRepaintRequest() const;
 	void requestViewRepaint(not_null<const ViewElement*> view);
@@ -385,6 +396,8 @@ public:
 	[[nodiscard]] rpl::producer<not_null<History*>> historyChanged() const;
 	void notifyViewPaidReactionSent(not_null<const ViewElement*> view);
 	[[nodiscard]] rpl::producer<not_null<const ViewElement*>> viewPaidReactionSent() const;
+	void notifyCallPaidReactionSent(not_null<Calls::GroupCall*> call);
+	[[nodiscard]] rpl::producer<not_null<Calls::GroupCall*>> callPaidReactionSent() const;
 	void sendHistoryChangeNotifications();
 
 	void notifyPinnedDialogsOrderUpdated();
@@ -1010,6 +1023,7 @@ private:
 		std::unique_ptr<Iv::Data> iv,
 		std::unique_ptr<WebPageStickerSet> stickerSet,
 		std::shared_ptr<UniqueGift> uniqueGift,
+		std::unique_ptr<WebPageAuction> auction,
 		int duration,
 		const QString &author,
 		bool hasLargeMedia,
@@ -1069,6 +1083,7 @@ private:
 	rpl::event_stream<not_null<HistoryItem*>> _newItemAdded;
 	rpl::event_stream<GiftUpdate> _giftUpdates;
 	rpl::event_stream<GiftsUpdate> _giftsUpdates;
+	rpl::event_stream<GiftAuctionGot> _giftAuctionGots;
 	rpl::event_stream<not_null<const HistoryItem*>> _itemRepaintRequest;
 	rpl::event_stream<not_null<const ViewElement*>> _viewRepaintRequest;
 	rpl::event_stream<not_null<const HistoryItem*>> _itemResizeRequest;
@@ -1079,6 +1094,7 @@ private:
 	rpl::event_stream<not_null<const HistoryItem*>> _itemRemoved;
 	rpl::event_stream<not_null<const ViewElement*>> _viewRemoved;
 	rpl::event_stream<not_null<const ViewElement*>> _viewPaidReactionSent;
+	rpl::event_stream<not_null<Calls::GroupCall*>> _callPaidReactionSent;
 	rpl::event_stream<not_null<const History*>> _historyUnloaded;
 	rpl::event_stream<not_null<const History*>> _historyCleared;
 	base::flat_set<not_null<History*>> _historiesChanged;

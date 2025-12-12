@@ -28,6 +28,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_boxes.h"
 #include "styles/style_layers.h"
 #include "styles/style_calls.h"
+#include "styles/style_chat_helpers.h"
 
 namespace Calls::Group {
 namespace {
@@ -224,7 +225,7 @@ void ChooseJoinAsBox(
 			&st::groupCallMultiSelect);
 	} else {
 		controller->setStyleOverrides(
-			&st::peerListJoinAsList,
+			&st::defaultChooseSendAs.list,
 			nullptr);
 	}
 	const auto content = box->addRow(
@@ -351,7 +352,7 @@ void ChooseJoinAsProcess::start(
 
 	createRequest();
 	session->account().sessionChanges(
-	) | rpl::start_with_next([=] {
+	) | rpl::on_next([=] {
 		_request = nullptr;
 	}, _request->lifetime);
 
@@ -475,7 +476,7 @@ void ChooseJoinAsProcess::processList(
 			.labelFilter = filter,
 		});
 		box->boxClosing(
-		) | rpl::start_with_next([=] {
+		) | rpl::on_next([=] {
 			_request = nullptr;
 		}, _request->lifetime);
 
@@ -489,7 +490,7 @@ void ChooseJoinAsProcess::processList(
 		std::move(info),
 		crl::guard(&_request->guard, [=](auto info) { finish(info); }));
 	box->boxClosing(
-	) | rpl::start_with_next([=] {
+	) | rpl::on_next([=] {
 		_request = nullptr;
 	}, _request->lifetime);
 

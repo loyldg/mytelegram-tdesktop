@@ -235,20 +235,34 @@ bool UserData::hasUnreadStories() const {
 	return flags() & Flag::HasUnreadStories;
 }
 
+bool UserData::hasActiveVideoStream() const {
+	return flags() & Flag::HasActiveVideoStream;
+}
+
 void UserData::setStoriesState(StoriesState state) {
 	Expects(state != StoriesState::Unknown);
 
 	const auto was = flags();
 	switch (state) {
 	case StoriesState::None:
-		_flags.remove(Flag::HasActiveStories | Flag::HasUnreadStories);
+		_flags.remove(Flag::HasActiveStories
+			| Flag::HasUnreadStories
+			| Flag::HasActiveVideoStream);
 		break;
 	case StoriesState::HasRead:
-		_flags.set(
-			(flags() & ~Flag::HasUnreadStories) | Flag::HasActiveStories);
+		_flags.set(Flag::HasActiveStories
+			| (was
+				& ~(Flag::HasUnreadStories | Flag::HasActiveVideoStream)));
 		break;
 	case StoriesState::HasUnread:
-		_flags.add(Flag::HasActiveStories | Flag::HasUnreadStories);
+		_flags.set((was & ~Flag::HasActiveVideoStream)
+			| Flag::HasActiveStories
+			| Flag::HasUnreadStories);
+		break;
+	case StoriesState::HasVideoStream:
+		_flags.set((was & ~Flag::HasUnreadStories)
+			| Flag::HasActiveStories
+			| Flag::HasActiveVideoStream);
 		break;
 	}
 	if (flags() != was) {
@@ -903,7 +917,7 @@ void ApplyUserUpdate(not_null<UserData*> user, const MTPDuserFull &update) {
 				}
 				creditsLoadLifetime->destroy();
 			});
-			base::timer_once(kTimeout) | rpl::start_with_next([=] {
+			base::timer_once(kTimeout) | rpl::on_next([=] {
 				creditsLoadLifetime->destroy();
 			}, *creditsLoadLifetime);
 			const auto currencyLoadLifetime
@@ -916,13 +930,13 @@ void ApplyUserUpdate(not_null<UserData*> user, const MTPDuserFull &update) {
 				}
 				currencyLoadLifetime->destroy();
 			};
-			currencyLoad->request() | rpl::start_with_error_done(
+			currencyLoad->request() | rpl::on_error_done(
 				[=](const QString &error) {
 					apply(CreditsAmount(0, CreditsType::Ton));
 				},
 				[=] { apply(currencyLoad->data().currentBalance); },
 				*currencyLoadLifetime);
-			base::timer_once(kTimeout) | rpl::start_with_next([=] {
+			base::timer_once(kTimeout) | rpl::on_next([=] {
 				currencyLoadLifetime->destroy();
 			}, *currencyLoadLifetime);
 		}
@@ -975,6 +989,9 @@ void ApplyUserUpdate(not_null<UserData*> user, const MTPDuserFull &update) {
 				: Api::DisallowedGiftType())
 			| (data.is_disallow_premium_gifts()
 				? Api::DisallowedGiftType::Premium
+				: Api::DisallowedGiftType())
+			| (data.is_disallow_stargifts_from_channels()
+				? Api::DisallowedGiftType::FromChannels
 				: Api::DisallowedGiftType())
 			| (update.is_display_gifts_button()
 				? Api::DisallowedGiftType::SendHide

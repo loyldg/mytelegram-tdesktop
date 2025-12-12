@@ -9,6 +9,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "data/data_star_gift.h"
 
+namespace Api {
+class PremiumGiftCodeOptions;
+} // namespace Api
+
 namespace ChatHelpers {
 class Show;
 } // namespace ChatHelpers
@@ -18,7 +22,12 @@ struct UniqueGift;
 struct GiftCode;
 struct CreditsHistoryEntry;
 class SavedStarGiftId;
+struct GiftAuctionState;
 } // namespace Data
+
+namespace Info::PeerGifts {
+struct GiftDescriptor;
+} // namespace Info::PeerGifts
 
 namespace Main {
 class Session;
@@ -44,6 +53,7 @@ class CustomEmoji;
 
 namespace Ui {
 
+class RpWidget;
 class PopupMenu;
 class GenericBox;
 class VerticalLayout;
@@ -55,12 +65,28 @@ void ShowStarGiftBox(
 	not_null<Window::SessionController*> controller,
 	not_null<PeerData*> peer);
 
+struct UniqueGiftCoverArgs {
+	rpl::producer<QString> pretitle;
+	rpl::producer<TextWithEntities> subtitle;
+	Fn<void()> subtitleClick;
+	bool subtitleLinkColored = false;
+	rpl::producer<CreditsAmount> resalePrice;
+	Fn<void()> resaleClick;
+	bool attributesInfo = false;
+	Fn<void(
+		std::optional<Data::UniqueGift> now,
+		std::optional<Data::UniqueGift> next,
+		float64 progress)> repaintedHook;
+};
+struct UniqueGiftCover {
+	Data::UniqueGift values;
+	bool force = false;
+};
+
 void AddUniqueGiftCover(
 	not_null<VerticalLayout*> container,
-	rpl::producer<Data::UniqueGift> data,
-	rpl::producer<QString> subtitleOverride = nullptr,
-	rpl::producer<CreditsAmount> resalePrice = nullptr,
-	Fn<void()> resaleClick = nullptr);
+	rpl::producer<UniqueGiftCover> data,
+	UniqueGiftCoverArgs &&args);
 void AddWearGiftCover(
 	not_null<VerticalLayout*> container,
 	const Data::UniqueGift &data,
@@ -84,6 +110,10 @@ void ShowUniqueGiftSellBox(
 	std::shared_ptr<Data::UniqueGift> unique,
 	Data::SavedStarGiftId savedId,
 	Settings::GiftWearBoxStyleOverride st);
+
+void ShowOfferBuyBox(
+	std::shared_ptr<ChatHelpers::Show> show,
+	std::shared_ptr<Data::UniqueGift> unique);
 
 void GiftReleasedByHandler(not_null<PeerData*> peer);
 
@@ -136,23 +166,29 @@ void ShowGiftTransferredToast(
 	not_null<PeerData*> to,
 	const Data::UniqueGift &gift);
 
-void ShowResaleGiftBoughtToast(
-	std::shared_ptr<Main::SessionShow> show,
-	not_null<PeerData*> to,
-	const Data::UniqueGift &gift);
-
-[[nodiscard]] rpl::lifetime ShowStarGiftResale(
-	not_null<Window::SessionController*> controller,
-	not_null<PeerData*> peer,
-	uint64 giftId,
-	QString title,
-	Fn<void()> finishRequesting);
-
 [[nodiscard]] CreditsAmount StarsFromTon(
 	not_null<Main::Session*> session,
 	CreditsAmount ton);
 [[nodiscard]] CreditsAmount TonFromStars(
 	not_null<Main::Session*> session,
 	CreditsAmount stars);
+
+struct GiftsDescriptor {
+	std::vector<Info::PeerGifts::GiftDescriptor> list;
+	std::shared_ptr<Api::PremiumGiftCodeOptions> api;
+};
+[[nodiscard]] object_ptr<RpWidget> MakeGiftsSendList(
+	not_null<Window::SessionController*> window,
+	not_null<PeerData*> peer,
+	rpl::producer<GiftsDescriptor> gifts,
+	Fn<void()> loadMore);
+
+void SendGiftBox(
+	not_null<GenericBox*> box,
+	not_null<Window::SessionController*> window,
+	not_null<PeerData*> peer,
+	std::shared_ptr<Api::PremiumGiftCodeOptions> api,
+	const Info::PeerGifts::GiftDescriptor &descriptor,
+	rpl::producer<Data::GiftAuctionState> auctionState);
 
 } // namespace Ui

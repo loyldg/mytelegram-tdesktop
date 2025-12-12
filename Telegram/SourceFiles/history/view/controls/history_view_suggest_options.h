@@ -16,6 +16,8 @@ class Show;
 namespace Ui {
 class GenericBox;
 class VerticalLayout;
+class NumberInput;
+class InputField;
 } // namespace Ui
 
 namespace Main {
@@ -32,6 +34,7 @@ enum class SuggestMode {
 	New,
 	Change,
 	Publish,
+	Gift,
 };
 
 struct SuggestTimeBoxArgs {
@@ -43,6 +46,21 @@ struct SuggestTimeBoxArgs {
 void ChooseSuggestTimeBox(
 	not_null<Ui::GenericBox*> box,
 	SuggestTimeBoxArgs &&args);
+
+struct StarsInputFieldArgs {
+	std::optional<int64> value;
+	int64 max = 0;
+};
+[[nodiscard]] not_null<Ui::NumberInput*> AddStarsInputField(
+	not_null<Ui::VerticalLayout*> container,
+	StarsInputFieldArgs &&args);
+
+struct TonInputFieldArgs {
+	int64 value = 0;
+};
+[[nodiscard]] not_null<Ui::InputField*> AddTonInputField(
+	not_null<Ui::VerticalLayout*> container,
+	TonInputFieldArgs &&args);
 
 struct StarsTonPriceInput {
 	Fn<void()> focusCallback;
@@ -71,9 +89,10 @@ struct StarsTonPriceArgs {
 struct SuggestPriceBoxArgs {
 	not_null<PeerData*> peer;
 	bool updating = false;
-	Fn<void(SuggestPostOptions)> done;
-	SuggestPostOptions value;
+	Fn<void(SuggestOptions)> done;
+	SuggestOptions value;
 	SuggestMode mode = SuggestMode::New;
+	QString giftName;
 };
 void ChooseSuggestPriceBox(
 	not_null<Ui::GenericBox*> box,
@@ -95,14 +114,14 @@ void InsufficientTonBox(
 	not_null<PeerData*> peer,
 	CreditsAmount required);
 
-class SuggestOptions final {
+class SuggestOptionsBar final {
 public:
-	SuggestOptions(
+	SuggestOptionsBar(
 		std::shared_ptr<ChatHelpers::Show> show,
 		not_null<PeerData*> peer,
-		SuggestPostOptions values,
+		SuggestOptions values,
 		SuggestMode mode);
-	~SuggestOptions();
+	~SuggestOptionsBar();
 
 	void paintBar(QPainter &p, int x, int y, int outerWidth);
 	void edit();
@@ -110,7 +129,7 @@ public:
 	void paintIcon(QPainter &p, int x, int y, int outerWidth);
 	void paintLines(QPainter &p, int x, int y, int outerWidth);
 
-	[[nodiscard]] SuggestPostOptions values() const;
+	[[nodiscard]] SuggestOptions values() const;
 
 	[[nodiscard]] rpl::producer<> updates() const;
 
@@ -128,7 +147,7 @@ private:
 	Ui::Text::String _title;
 	Ui::Text::String _text;
 
-	SuggestPostOptions _values;
+	SuggestOptions _values;
 	rpl::event_stream<> _updates;
 
 	rpl::lifetime _lifetime;

@@ -54,7 +54,7 @@ not_null<Ui::SlideWrap<Ui::VerticalLayout>*> CreateUnconfirmedAuthContent(
 		parent,
 		object_ptr<Ui::VerticalLayout>(parent));
 	const auto content = wrap->entity();
-	content->paintRequest() | rpl::start_with_next([=] {
+	content->paintRequest() | rpl::on_next([=] {
 		auto p = QPainter(content);
 		p.fillRect(content->rect(), st::dialogsBg);
 	}, content->lifetime());
@@ -141,7 +141,7 @@ not_null<Ui::SlideWrap<Ui::VerticalLayout>*> CreateUnconfirmedAuthContent(
 	});
 	buttons->sizeValue(
 	) | rpl::filter_size(
-	) | rpl::start_with_next([=](const QSize &s) {
+	) | rpl::on_next([=](const QSize &s) {
 		const auto halfWidth = (s.width() - rect::m::sum::h(padding)) / 2;
 		yes->moveToLeft(
 			padding.left() + (halfWidth - yes->width()) / 2,
@@ -156,15 +156,19 @@ not_null<Ui::SlideWrap<Ui::VerticalLayout>*> CreateUnconfirmedAuthContent(
 	return wrap;
 }
 
-TopBarSuggestionContent::TopBarSuggestionContent(not_null<Ui::RpWidget*> p)
-: Ui::RippleButton(p, st::defaultRippleAnimationBgOver)
+TopBarSuggestionContent::TopBarSuggestionContent(
+	not_null<Ui::RpWidget*> parent,
+	Fn<bool()> emojiPaused)
+: Ui::RippleButton(parent, st::defaultRippleAnimationBgOver)
 , _titleSt(st::semiboldTextStyle)
 , _contentTitleSt(st::dialogsTopBarSuggestionTitleStyle)
-, _contentTextSt(st::dialogsTopBarSuggestionAboutStyle) {
+, _contentTextSt(st::dialogsTopBarSuggestionAboutStyle)
+, _emojiPaused(std::move(emojiPaused)) {
 	setRightIcon(RightIcon::Close);
 }
 
 void TopBarSuggestionContent::setRightIcon(RightIcon icon) {
+	_rightButton = nullptr;
 	if (icon == _rightIcon) {
 		return;
 	}
@@ -177,7 +181,7 @@ void TopBarSuggestionContent::setRightIcon(RightIcon icon) {
 			st::dialogsCancelSearchInPeer);
 		const auto rightHide = _rightHide.get();
 		sizeValue() | rpl::filter_size(
-		) | rpl::start_with_next([=](const QSize &s) {
+		) | rpl::on_next([=](const QSize &s) {
 			rightHide->moveToRight(st::buttonRadius, st::lineWidth);
 		}, rightHide->lifetime());
 		rightHide->show();
@@ -191,7 +195,7 @@ void TopBarSuggestionContent::setRightIcon(RightIcon icon) {
 			&st::settingsPremiumArrowOver);
 		arrow->setAttribute(Qt::WA_TransparentForMouseEvents);
 		sizeValue() | rpl::filter_size(
-		) | rpl::start_with_next([=](const QSize &s) {
+		) | rpl::on_next([=](const QSize &s) {
 			const auto &point = st::settingsPremiumArrowShift;
 			arrow->moveToLeft(
 				s.width() - arrow->width(),
@@ -199,6 +203,35 @@ void TopBarSuggestionContent::setRightIcon(RightIcon icon) {
 		}, arrow->lifetime());
 		arrow->show();
 	}
+}
+
+void TopBarSuggestionContent::setRightButton(
+		rpl::producer<TextWithEntities> text,
+		Fn<void()> callback) {
+	_rightHide = nullptr;
+	_rightArrow = nullptr;
+	_rightIcon = RightIcon::None;
+	if (!text) {
+		_rightButton = nullptr;
+		return;
+	}
+	using namespace Ui;
+	_rightButton = base::make_unique_q<RoundButton>(
+		this,
+		rpl::single(QString()),
+		st::dialogsTopBarRightButton);
+	_rightButton->setText(std::move(text));
+	rpl::combine(
+		sizeValue(),
+		_rightButton->sizeValue()
+	) | rpl::on_next([=](QSize outer, QSize inner) {
+		const auto top = (outer.height() - inner.height()) / 2;
+		_rightButton->moveToRight(top, top, outer.width());
+	}, _rightButton->lifetime());
+	_rightButton->setFullRadius(true);
+	_rightButton->setTextTransform(RoundButton::TextTransform::NoTransform);
+	_rightButton->setClickedCallback(std::move(callback));
+	_rightButton->show();
 }
 
 void TopBarSuggestionContent::draw(QPainter &p) {
@@ -226,6 +259,8 @@ void TopBarSuggestionContent::draw(QPainter &p) {
 		- (_rightHide ? _rightHide->width() : 0);
 	const auto titleRight = leftPadding;
 	const auto hasSecondLineTitle = availableWidth < _contentTitle.maxWidth();
+	const auto paused = On(PowerSaving::kEmojiChat)
+		|| (_emojiPaused && _emojiPaused());
 	p.setPen(st::windowActiveTextFg);
 	p.setPen(st::windowFg);
 	{
@@ -237,7 +272,7 @@ void TopBarSuggestionContent::draw(QPainter &p) {
 				? availableWidth
 				: (availableWidth - titleRight),
 			.availableWidth = availableWidth,
-			.pausedEmoji = On(PowerSaving::kEmojiChat),
+			.pausedEmoji = paused,
 			.elisionLines = hasSecondLineTitle ? 2 : 1,
 		});
 	}
@@ -270,7 +305,7 @@ void TopBarSuggestionContent::draw(QPainter &p) {
 					: availableWidth,
 			};
 		};
-		p.setPen(st::windowSubTextFg);
+		p.setPen(_descriptionColorOverride.value_or(st::windowSubTextFg->c));
 		_contentText.draw(p, {
 			.position = QPoint(left, top),
 			.outerWidth = availableWidth,
@@ -278,7 +313,7 @@ void TopBarSuggestionContent::draw(QPainter &p) {
 			.geometry = Ui::Text::GeometryDescriptor{
 				.layout = std::move(lineLayout),
 			},
-			.pausedEmoji = On(PowerSaving::kEmojiChat),
+			.pausedEmoji = paused,
 		});
 		_lastPaintedContentTop = top;
 		_lastPaintedContentLineAmount = lastContentLineAmount;
@@ -288,7 +323,9 @@ void TopBarSuggestionContent::draw(QPainter &p) {
 void TopBarSuggestionContent::setContent(
 		TextWithEntities title,
 		TextWithEntities description,
-		std::optional<Ui::Text::MarkedContext> context) {
+		std::optional<Ui::Text::MarkedContext> context,
+		std::optional<QColor> descriptionColorOverride) {
+	_descriptionColorOverride = descriptionColorOverride;
 	if (context) {
 		context->repaint = [=] { update(); };
 		_contentTitle.setMarkedText(
@@ -305,6 +342,7 @@ void TopBarSuggestionContent::setContent(
 		_contentTitle.setMarkedText(_contentTitleSt, std::move(title));
 		_contentText.setMarkedText(_contentTextSt, std::move(description));
 	}
+	update();
 }
 
 void TopBarSuggestionContent::paintEvent(QPaintEvent *) {
@@ -333,7 +371,7 @@ void TopBarSuggestionContent::setHideCallback(Fn<void()> hideCallback) {
 }
 
 void TopBarSuggestionContent::setLeftPadding(rpl::producer<int> value) {
-	std::move(value) | rpl::start_with_next([=](int padding) {
+	std::move(value) | rpl::on_next([=](int padding) {
 		_leftPadding = padding;
 		update();
 	}, lifetime());
