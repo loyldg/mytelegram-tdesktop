@@ -171,12 +171,15 @@ void PasskeysNoneBox(
 	}
 	Ui::AddSkip(content);
 	Ui::AddSkip(content);
-	if (session->passkeys().canRegister()) {
+	{
 		const auto &st = st::premiumPreviewDoubledLimitsBox;
+		const auto canRegister = session->passkeys().canRegister();
 		box->setStyle(st);
 		auto button = object_ptr<Ui::RoundButton>(
 			box,
-			tr::lng_settings_passkeys_none_button(),
+			canRegister
+				? tr::lng_settings_passkeys_none_button()
+				: tr::lng_settings_passkeys_none_button_unsupported(),
 			st::defaultActiveButton);
 		button->setTextTransform(Ui::RoundButton::TextTransform::NoTransform);
 		button->resizeToWidth(box->width()
@@ -202,6 +205,11 @@ void PasskeysNoneBox(
 				});
 			});
 		});
+		if (!canRegister) {
+			button->setAttribute(Qt::WA_TransparentForMouseEvents);
+			button->setTextFgOverride(
+				anim::with_alpha(button->st().textFg->c, 0.5));
+		}
 		box->addButton(std::move(button));
 	}
 }
@@ -387,11 +395,11 @@ void Passkeys::setupContent(
 			tr::lng_channel_earn_about_link(
 				lt_emoji,
 				rpl::single(Ui::Text::IconEmoji(&st::textMoreIconEmoji)),
-				Ui::Text::RichLangValue
+				tr::rich
 			) | rpl::map([](TextWithEntities text) {
-				return Ui::Text::Link(std::move(text), u"internal"_q);
+				return tr::link(std::move(text), u"internal"_q);
 			}),
-			Ui::Text::RichLangValue
+			tr::rich
 		));
 	label->setClickHandlerFilter([=](const auto &...) {
 		controller->show(Box(PasskeysNoneBox, session));

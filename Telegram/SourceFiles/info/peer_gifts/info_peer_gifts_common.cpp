@@ -159,6 +159,10 @@ GiftButton::GiftButton(
 : AbstractButton(parent)
 , _delegate(delegate)
 , _lockedTimer([=] { refreshLocked(); }) {
+	style::PaletteChanged() | rpl::on_next([=] {
+		_delegate->invalidateCache();
+		update();
+	}, lifetime());
 }
 
 GiftButton::~GiftButton() {
@@ -218,7 +222,7 @@ void GiftButton::setDescriptor(const GiftDescriptor &descriptor, Mode mode) {
 		_text = Ui::Text::String(st::giftBoxGiftHeight / 4);
 		_text.setMarkedText(
 			st::defaultTextStyle,
-			Ui::Text::Bold(
+			tr::bold(
 				tr::lng_months(tr::now, lt_count, months)
 			).append('\n').append(
 				tr::lng_gift_premium_label(tr::now)
@@ -1128,6 +1132,11 @@ QImage Delegate::cachedBadge(const GiftBadge &badge) {
 
 bool Delegate::amPremium() {
 	return _session->premium();
+}
+
+void Delegate::invalidateCache() {
+	_bg = QImage();
+	_badges.clear();
 }
 
 DocumentData *LookupGiftSticker(

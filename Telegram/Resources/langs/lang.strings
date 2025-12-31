@@ -22,7 +22,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_menu_my_stories" = "My Stories";
 "lng_menu_my_groups" = "My Groups";
 "lng_menu_my_channels" = "My Channels";
-"lng_open_menu" = "Open navigation menu";
+"lng_main_menu" = "Main menu";
+"lng_filter_unread_chats#one" = "{text} ({count} unread chat)";
+"lng_filter_unread_chats#other" = "{text} ({count} unread chats)";
 
 "lng_disable_notifications_from_tray" = "Disable notifications";
 "lng_enable_notifications_from_tray" = "Enable notifications";
@@ -795,6 +797,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_settings_channel_label" = "Personal channel";
 "lng_settings_channel_add" = "Add";
 "lng_settings_channel_remove" = "Remove";
+"lng_settings_channel_menu_remove" = "Remove Personal Channel";
 "lng_settings_channel_no_yet" = "You don't have any public channels yet.";
 "lng_settings_channel_start" = "Start a Channel";
 "lng_settings_channel_saved" = "Your personal channel was updated.";
@@ -1270,6 +1273,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_settings_passkeys_none_info3_title" = "Store Passkey securely";
 "lng_settings_passkeys_none_info3_about" = "Your passkey is stored safely in the cloud service you choose.";
 "lng_settings_passkeys_none_button" = "Create Passkey";
+"lng_settings_passkeys_none_button_unsupported" = "Unsupported";
 "lng_settings_passkeys_created" = "Created {date}";
 "lng_settings_passkeys_last_used" = "Last used {date}";
 "lng_settings_passkeys_unsigned_error" = "Passkeys are not available in unsigned builds. Please use an official signed version of Telegram Desktop.";
@@ -2659,6 +2663,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_forwarded_story" = "Story from {user}";
 "lng_forwarded_story_expired" = "This story has expired.";
 "lng_forwarded_date" = "Original: {date}";
+"lng_forwarded_saved_date" = "Saved date: {date}";
 "lng_forwarded_channel" = "Forwarded from {channel}";
 "lng_forwarded_psa_default" = "Forwarded from {channel}";
 "lng_forwarded_via" = "Forwarded from {user} via {inline_bot}";
@@ -3831,6 +3836,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_gift_unique_backdrop" = "Backdrop";
 "lng_gift_unique_symbol" = "Symbol";
 "lng_gift_unique_rarity" = "Only {percent} of such collectibles have this attribute.";
+"lng_gift_unique_sender" = "{from} sent you this gift on {date}";
+"lng_gift_unique_sender_you" = "You bought this gift on {date}";
 "lng_gift_unique_availability_label" = "Quantity";
 "lng_gift_unique_availability#one" = "{count} of {amount} issued";
 "lng_gift_unique_availability#other" = "{count} of {amount} issued";
@@ -5175,6 +5182,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_edit_channel_status_about" = "Choose a status that will be shown next to the channel's name.";
 "lng_edit_channel_status_group" = "Set Group Emoji Status";
 "lng_edit_channel_status_about_group" = "Choose a status that will be shown next to the group's name.";
+"lng_edit_channel_personal_channel" = "Set as Personal Channel";
 "lng_edit_self_title" = "Edit your name";
 "lng_confirm_contact_data" = "New Contact";
 "lng_add_contact" = "Create";
@@ -7427,6 +7435,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_mac_menu_player_resume" = "Resume";
 "lng_mac_menu_player_next" = "Next";
 "lng_mac_menu_player_previous" = "Previous";
+"lng_mac_menu_profiles" = "Profiles";
 
 "lng_mac_touchbar_favorite_stickers" = "Favorite stickers";
 

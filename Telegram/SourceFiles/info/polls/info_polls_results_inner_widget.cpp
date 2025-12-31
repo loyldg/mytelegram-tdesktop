@@ -200,7 +200,7 @@ void ListController::loadMoreRows() {
 	const auto limit = _offset.isEmpty() ? kFirstPage : kPerPage;
 	_loadRequestId = _api.request(MTPmessages_GetPollVotes(
 		MTP_flags(flags),
-		item->history()->peer->input,
+		item->history()->peer->input(),
 		MTP_int(item->id),
 		MTP_bytes(_option),
 		MTP_string(_offset),
@@ -524,7 +524,7 @@ ListController *CreateAnswerRows(
 				tr::lng_polls_show_more(
 					lt_count_decimal,
 					controller->loadMoreCount() | rpl::map(_1 + 0.),
-					Ui::Text::Upper),
+					tr::upper),
 				st::pollResultsShowMore)));
 	more->entity()->setClickedCallback([=] {
 		controller->allowLoadMore();
