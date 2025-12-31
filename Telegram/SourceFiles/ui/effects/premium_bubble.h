@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "ui/effects/numbers_animation.h"
 #include "ui/effects/ministar_particles.h"
+#include "ui/abstract_button.h"
 #include "ui/rp_widget.h"
 
 enum lngtag_count : int;
@@ -55,7 +56,6 @@ public:
 	[[nodiscard]] int height() const;
 	[[nodiscard]] int width() const;
 	[[nodiscard]] int bubbleRadius() const;
-	[[nodiscard]] int countMaxWidth(int maxPossibleCounter) const;
 	[[nodiscard]] int countTargetWidth(int targetCounter) const;
 	[[nodiscard]] QRect bubbleGeometry(const QRect &r) const;
 
@@ -64,11 +64,16 @@ public:
 	void setFlipHorizontal(bool value);
 	void paintBubble(QPainter &p, const QRect &r, const QBrush &brush);
 	[[nodiscard]] QPainterPath bubblePath(const QRect &r) const;
+	void setSubtext(QString subtext);
+
+	void finishAnimating();
 
 	[[nodiscard]] rpl::producer<> widthChanges() const;
 
 private:
 	[[nodiscard]] int filledWidth() const;
+	[[nodiscard]] int topTextWidth() const;
+	[[nodiscard]] int bottomTextWidth() const;
 
 	const style::PremiumBubble &_st;
 
@@ -78,8 +83,8 @@ private:
 	const style::icon *_icon;
 	NumbersAnimation _numberAnimation;
 	Text::String _additional;
+	Text::String _subtext;
 	const int _height;
-	const int _textTop;
 	const bool _hasTail;
 
 	std::optional<int> _counter;
@@ -106,7 +111,7 @@ enum class BubbleType : uchar {
 	Credits,
 };
 
-class BubbleWidget final : public Ui::RpWidget {
+class BubbleWidget final : public Ui::AbstractButton {
 public:
 	BubbleWidget(
 		not_null<Ui::RpWidget*> parent,
@@ -117,6 +122,9 @@ public:
 		rpl::producer<> showFinishes,
 		const style::icon *icon,
 		const style::margins &outerPadding);
+
+	void setBrushOverride(std::optional<QBrush> brushOverride);
+	void setSubtext(QString subtext);
 
 protected:
 	void paintEvent(QPaintEvent *e) override;
@@ -142,10 +150,12 @@ private:
 	float64 _animatingFromBubbleEdge = 0.;
 	rpl::variable<BubbleRowState> _state;
 	Bubble _bubble;
+	std::optional<QBrush> _brushOverride;
 	const BubbleType _type;
 	const style::margins _outerPadding;
 
 	Ui::Animations::Simple _appearanceAnimation;
+	Fn<void(float64)> _appearanceCallback;
 	QSize _spaceForDeflection;
 
 	QLinearGradient _cachedGradient;
@@ -163,7 +173,7 @@ private:
 
 };
 
-void AddBubbleRow(
+not_null<BubbleWidget*> AddBubbleRow(
 	not_null<Ui::VerticalLayout*> parent,
 	const style::PremiumBubble &st,
 	rpl::producer<> showFinishes,
@@ -174,7 +184,7 @@ void AddBubbleRow(
 	std::optional<tr::phrase<lngtag_count>> phrase,
 	const style::icon *icon);
 
-void AddBubbleRow(
+not_null<BubbleWidget*> AddBubbleRow(
 	not_null<Ui::VerticalLayout*> parent,
 	const style::PremiumBubble &st,
 	rpl::producer<> showFinishes,
