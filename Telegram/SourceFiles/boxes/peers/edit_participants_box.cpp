@@ -1698,7 +1698,7 @@ base::unique_qptr<Ui::PopupMenu> ParticipantsBoxController::rowContextMenu(
 				st::historyHasCustomEmojiPosition,
 				std::move(text));
 			if (const auto n = _navigation) {
-				button->setClickedCallback([=] {
+				button->setActionTriggered([=] {
 					n->parentController()->show(PrepareShortInfoBox(by, n));
 				});
 			}
@@ -1902,6 +1902,9 @@ void ParticipantsBoxController::editRestrictedDone(
 
 void ParticipantsBoxController::kickParticipant(not_null<PeerData*> participant) {
 	const auto user = participant->asUser();
+	if (user && user->isInaccessible()) {
+		return kickParticipantSure(participant);
+	}
 	const auto text = ((_peer->isChat() || _peer->isMegagroup())
 		? tr::lng_profile_sure_kick
 		: tr::lng_profile_sure_kick_channel)(
@@ -2128,7 +2131,12 @@ auto ParticipantsBoxController::computeType(
 		: (user && _additional.adminRights(user).has_value())
 		? Rights::Admin
 		: Rights::Normal;
-	result.adminRank = user ? _additional.adminRank(user) : QString();
+	result.canRemove = _additional.canRemoveParticipant(participant)
+		&& user
+		&& user->isInaccessible();
+	if (!result.canRemove) {
+		result.adminRank = user ? _additional.adminRank(user) : QString();
+	}
 	return result;
 }
 

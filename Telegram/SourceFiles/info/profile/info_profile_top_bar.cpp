@@ -942,8 +942,10 @@ void TopBar::setupActions(not_null<Window::SessionController*> controller) {
 		return;
 	}
 	if (!topic
-		&& ((chat && !chat->amCreator())
-			|| (channel && !channel->amCreator()))) {
+		&& ((chat && !chat->amCreator() && !chat->hasAdminRights())
+			|| (channel
+				&& !channel->amCreator()
+				&& !channel->hasAdminRights()))) {
 		const auto show = controller->uiShow();
 		const auto reportButton = Ui::CreateChild<TopBarActionButton>(
 			this,
@@ -2561,9 +2563,6 @@ void TopBar::setupStoryOutline(const QRect &geometry) {
 }
 
 void TopBar::updateStoryOutline(std::optional<QColor> edgeColor) {
-	if (width() <= 0) {
-		return;
-	}
 	const auto user = _peer->asUser();
 	const auto channel = _peer->asChannel();
 	if (!user && !channel) {

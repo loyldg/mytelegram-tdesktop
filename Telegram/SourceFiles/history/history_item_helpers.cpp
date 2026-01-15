@@ -42,6 +42,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "settings/settings_credits_graphics.h"
 #include "storage/storage_account.h"
 #include "ui/boxes/confirm_box.h"
+#include "ui/boxes/emoji_stake_box.h" // InsufficientTonBox
 #include "ui/text/format_values.h"
 #include "ui/text/text_utilities.h"
 #include "ui/toast/toast.h"
@@ -515,10 +516,12 @@ bool SendPaymentHelper::check(
 			done);
 		return false;
 	}
+	const auto session = &peer->session();
 	if (checkSuggestPriceTon
-		&& checkSuggestPriceTon > peer->session().credits().tonBalance()) {
+		&& checkSuggestPriceTon > session->credits().tonBalance()) {
 		using namespace HistoryView;
-		show->show(Box(InsufficientTonBox, peer, checkSuggestPriceTon));
+		show->show(
+			Box(Ui::InsufficientTonBox, session, checkSuggestPriceTon));
 		return false;
 	}
 	return true;
@@ -733,9 +736,10 @@ ClickHandlerPtr JumpToMessageClickHandler(
 			: peer->session().tryResolveWindow(peer);
 		if (controller) {
 			auto params = Window::SectionShow{
-				Window::SectionShow::Way::Forward
+				Window::SectionShow::Way::Forward,
 			};
 			params.highlight = highlight;
+			params.allowDuplicateInStack = true;
 			params.origin = Window::SectionShow::OriginMessage{
 				returnToId
 			};
@@ -843,6 +847,9 @@ MessageFlags FlagsFromMTP(
 			? Flag::TonPaidSuggested
 			: (flags & MTP::f_paid_suggested_post_stars)
 			? Flag::StarsPaidSuggested
+			: Flag())
+		| ((flags & MTP::f_summary_from_language)
+			? Flag::CanBeSummarized
 			: Flag());
 }
 

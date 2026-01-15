@@ -210,6 +210,15 @@ void PeerListBox::prepare() {
 	if (_init) {
 		_init(this);
 	}
+
+	{
+		setDimensions(
+			_controller->contentWidth(),
+			std::clamp(
+				content()->height(),
+				st::boxMaxListHeight,
+				st::boxMaxListHeight * 3));
+	}
 }
 
 void PeerListBox::keyPressEvent(QKeyEvent *e) {
