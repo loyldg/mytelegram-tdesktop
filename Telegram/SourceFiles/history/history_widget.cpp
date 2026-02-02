@@ -2605,6 +2605,7 @@ void HistoryWidget::showHistory(
 	updateReplaceMediaButton();
 	_fieldBarCancel->hide();
 
+	_mediaEditManager.cancel();
 	_membersDropdownShowTimer.cancel();
 	_scroll->takeWidget<HistoryInner>().destroy();
 
@@ -5708,7 +5709,9 @@ bool HistoryWidget::searchInChatEmbedded(
 		Dialogs::Key chat,
 		PeerData *searchFrom) {
 	const auto peer = chat.peer(); // windows todo
-	if (!peer || Window::SeparateId(peer) != controller()->windowId()) {
+	if (!peer
+		|| ((Window::SeparateId(peer) != controller()->windowId())
+			&& !controller()->isPrimary())) {
 		return false;
 	} else if (_peer != peer) {
 		const auto weak = base::make_weak(this);
@@ -6549,7 +6552,11 @@ bool HistoryWidget::confirmSendingFiles(
 		std::optional<bool> overrideSendImagesAsPhotos,
 		const QString &insertTextOnCancel) {
 	if (!canWriteMessage()) {
-		return false;
+		if (_composeSearch) {
+			_composeSearch->hideAnimated();
+		} else {
+			return false;
+		}
 	}
 
 	const auto hasImage = data->hasImage();
@@ -7735,9 +7742,10 @@ bool HistoryWidget::replyToPreviousMessage() {
 		|| (_replyTo && _replyTo.messageId.peer != _history->peer->id)) {
 		return false;
 	}
+	const auto isFieldVisible = _field->isVisible();
 	const auto fullId = FullMsgId(
 		_history->peer->id,
-		(_field->isVisible()
+		((isFieldVisible && _replyTo.messageId.msg)
 			? _replyTo.messageId.msg
 			: _highlighter.latestSingleHighlightedMsgId()));
 	if (const auto item = session().data().message(fullId)) {
@@ -7745,8 +7753,12 @@ bool HistoryWidget::replyToPreviousMessage() {
 			if (const auto previousView = view->previousDisplayedInBlocks()) {
 				const auto previous = previousView->data();
 				controller()->showMessage(previous);
-				if (_field->isVisible()) {
-					replyToMessage(previous);
+				if (isFieldVisible) {
+					if (previous->isLocal()) {
+						cancelReply();
+					} else {
+						replyToMessage(previous);
+					}
 				}
 				return true;
 			}
@@ -7754,8 +7766,12 @@ bool HistoryWidget::replyToPreviousMessage() {
 	} else if (const auto previousView = _history->findLastDisplayed()) {
 		const auto previous = previousView->data();
 		controller()->showMessage(previous);
-		if (_field->isVisible()) {
-			replyToMessage(previous);
+		if (isFieldVisible) {
+			if (previous->isLocal()) {
+				cancelReply();
+			} else {
+				replyToMessage(previous);
+			}
 		}
 		return true;
 	}
@@ -7769,9 +7785,10 @@ bool HistoryWidget::replyToNextMessage() {
 		|| (_replyTo && _replyTo.messageId.peer != _history->peer->id)) {
 		return false;
 	}
+	const auto isFieldVisible = _field->isVisible();
 	const auto fullId = FullMsgId(
 		_history->peer->id,
-		(_field->isVisible()
+		((isFieldVisible && _replyTo.messageId.msg)
 			? _replyTo.messageId.msg
 			: _highlighter.latestSingleHighlightedMsgId()));
 	if (const auto item = session().data().message(fullId)) {
@@ -7779,8 +7796,12 @@ bool HistoryWidget::replyToNextMessage() {
 			if (const auto nextView = view->nextDisplayedInBlocks()) {
 				const auto next = nextView->data();
 				controller()->showMessage(next);
-				if (_field->isVisible()) {
-					replyToMessage(next);
+				if (isFieldVisible) {
+					if (next->isLocal()) {
+						cancelReply();
+					} else {
+						replyToMessage(next);
+					}
 				}
 			} else {
 				_highlighter.clear();
@@ -8793,6 +8814,19 @@ void HistoryWidget::setReplyFieldsFromProcessing() {
 	} else {
 		_replyEditMsg = item;
 		_replyTo = id;
+		if (_replyTo) {
+			if (const auto i = session().data().message(_replyTo.messageId)) {
+				if (const auto media = i->media()) {
+					using namespace SendMenu;
+					const auto type = media->hasSpoiler()
+						? Action{ .type = Action::Type::SpoilerOn }
+						: Action{ .type = Action::Type::SpoilerOff };
+					_mediaEditManager.apply(type);
+				}
+			}
+		} else {
+			_mediaEditManager.cancel();
+		}
 		cancelSuggestPost();
 		updateReplyEditText(_replyEditMsg);
 		updateCanSendMessage();
@@ -8821,7 +8855,8 @@ void HistoryWidget::editMessage(
 			Window::PeerMenuEditTodoList(controller(), item);
 			return;
 		}
-	} else if (_composeSearch) {
+	}
+	if (_composeSearch) {
 		_composeSearch->hideAnimated();
 	}
 
@@ -9094,6 +9129,11 @@ void HistoryWidget::fullInfoUpdated() {
 		refresh = true;
 	} else if (!_scroll->isHidden() && _unblock->isHidden() == isBlocked()) {
 		refresh = true;
+	}
+	if (_history
+			&& HistoryView::SubsectionTabs::UsedFor(_history)
+			&& !_subsectionTabs) {
+		validateSubsectionTabs();
 	}
 	if (refresh) {
 		updateControlsVisibility();
