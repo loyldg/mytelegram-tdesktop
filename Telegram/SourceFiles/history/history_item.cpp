@@ -29,6 +29,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "storage/file_upload.h"
 #include "storage/storage_shared_media.h"
 #include "main/main_session.h"
+#include "main/main_app_config.h"
 #include "main/main_session_settings.h"
 #include "menu/menu_ttl_validator.h"
 #include "apiwrap.h"
@@ -475,6 +476,13 @@ HistoryItem::HistoryItem(
 		if (const auto check = FromMTP(this, data.vfactcheck())) {
 			AddComponents(HistoryMessageFactcheck::Bit());
 			Get<HistoryMessageFactcheck>()->data = check;
+		}
+	}
+
+	if (const auto rank = data.vfrom_rank()) {
+		if (!rank->v.isEmpty()) {
+			AddComponents(HistoryMessageFromRank::Bit());
+			Get<HistoryMessageFromRank>()->rank = qs(*rank);
 		}
 	}
 
@@ -2031,14 +2039,6 @@ void HistoryItem::applyEdition(HistoryMessageEdition &&edition) {
 	if (!edition.useSameMarkup) {
 		setReplyMarkup(base::take(edition.replyMarkup));
 	}
-	if (updatingSavedLocalEdit) {
-		Get<HistoryMessageSavedMediaData>()->media = edition.mtpMedia
-			? CreateMedia(this, *edition.mtpMedia)
-			: nullptr;
-	} else {
-		removeFromSharedMediaIndex();
-		refreshMedia(edition.mtpMedia);
-	}
 	if (!edition.useSameReactions) {
 		updateReactions(edition.mtpReactions);
 	}
@@ -2047,6 +2047,14 @@ void HistoryItem::applyEdition(HistoryMessageEdition &&edition) {
 	}
 	if (!edition.useSameForwards) {
 		setForwardsCount(edition.forwards);
+	}
+	if (updatingSavedLocalEdit) {
+		Get<HistoryMessageSavedMediaData>()->media = edition.mtpMedia
+			? CreateMedia(this, *edition.mtpMedia)
+			: nullptr;
+	} else {
+		removeFromSharedMediaIndex();
+		refreshMedia(edition.mtpMedia);
 	}
 	const auto &checkedMedia = updatingSavedLocalEdit
 		? Get<HistoryMessageSavedMediaData>()->media
@@ -2110,6 +2118,15 @@ void HistoryItem::applyEdition(HistoryMessageEdition &&edition) {
 	applyTTL(edition.ttl);
 	setFactcheck(FromMTP(this, edition.mtpFactcheck));
 
+	if (!edition.fromRank.isEmpty()) {
+		if (!Has<HistoryMessageFromRank>()) {
+			AddComponents(HistoryMessageFromRank::Bit());
+		}
+		Get<HistoryMessageFromRank>()->rank = edition.fromRank;
+	} else {
+		RemoveComponents(HistoryMessageFromRank::Bit());
+	}
+
 	finishEdition(keyboardTop);
 }
 
@@ -2145,6 +2162,8 @@ void HistoryItem::setStoryFields(not_null<Data::Story*> story) {
 }
 
 void HistoryItem::applyEdition(const MTPDmessageService &message) {
+	const auto wasNfr = Get<HistoryServiceNoForwardsRequest>();
+	const auto wasActionTaken = wasNfr && wasNfr->actionTaken;
 	const auto wasSublist = savedSublist();
 	if (message.vaction().type() == mtpc_messageActionHistoryClear) {
 		const auto wasGrouped = history()->owner().groups().isGrouped(this);
@@ -2200,6 +2219,9 @@ void HistoryItem::applyEdition(const MTPDmessageService &message) {
 		_flags &= ~MessageFlag::DisplayFromChecked;
 
 		updateReactions(message.vreactions());
+	}
+	if (const auto nowNfr = Get<HistoryServiceNoForwardsRequest>()) {
+		nowNfr->actionTaken = wasActionTaken;
 	}
 	const auto nowSublist = savedSublist();
 	if (wasSublist && nowSublist != wasSublist) {
@@ -3272,6 +3294,13 @@ QString HistoryItem::originalPostAuthor() const {
 		if (!msgsigned->isAnonymousRank && !msgsigned->viaBusinessBot) {
 			return msgsigned->author;
 		}
+	}
+	return QString();
+}
+
+QString HistoryItem::fromRank() const {
+	if (const auto component = Get<HistoryMessageFromRank>()) {
+		return component->rank;
 	}
 	return QString();
 }
@@ -4923,6 +4952,31 @@ void HistoryItem::createServiceFromMtp(const MTPDmessageService &message) {
 			? SuggestRefundType::Expired
 			: SuggestRefundType::User;
 		finish->price = CreditsAmountFromTL(data.vprice());
+	} else if (type == mtpc_messageActionNoForwardsToggle) {
+		AddComponents(HistoryServiceNoForwardsToggle::Bit());
+	} else if (type == mtpc_messageActionNoForwardsRequest) {
+		const auto &data = action.c_messageActionNoForwardsRequest();
+		const auto expired = data.is_expired();
+		const auto period = _history->session().appConfig()
+			.noForwardsRequestExpirePeriod();
+		const auto expiresAt = TimeId(_date + period);
+		const auto isExpired = expired
+			|| (expiresAt <= base::unixtime::now());
+		auto mask = HistoryServiceNoForwardsRequest::Bit();
+		const auto actions = (!isExpired && !out())
+			? SuggestionActions::NoForwardsRequest
+			: SuggestionActions::None;
+		if (actions != SuggestionActions::None) {
+			mask |= HistoryMessageReplyMarkup::Bit();
+		}
+		UpdateComponents(mask);
+		const auto request = Get<HistoryServiceNoForwardsRequest>();
+		request->expired = isExpired;
+		request->expiresAt = expiresAt;
+		if (actions != SuggestionActions::None) {
+			const auto markup = Get<HistoryMessageReplyMarkup>();
+			markup->updateSuggestControls(actions);
+		}
 	}
 	if (const auto replyTo = message.vreply_to()) {
 		replyTo->match([&](const MTPDmessageReplyHeader &data) {
@@ -6372,6 +6426,10 @@ void HistoryItem::setServiceMessageByAction(const MTPmessageAction &action) {
 						: QString(),
 					},
 					tr::marked);
+			} else if (action.is_craft()) {
+				result.text = tr::lng_action_gift_crafted(
+					tr::now,
+					tr::marked);
 			} else {
 				result.text = resale
 					? tr::lng_action_gift_self_bought(
@@ -6524,15 +6582,10 @@ void HistoryItem::setServiceMessageByAction(const MTPmessageAction &action) {
 					giftName,
 					tr::marked);
 			} else {
-				result.links.push_back(fromLink());
-				result.text = tr::lng_action_gift_offer(
+				result.text = tr::lng_action_gift_offer_incoming(
 					tr::now,
-					lt_user,
-					fromLinkText(),
-					lt_cost,
+					lt_amount,
 					cost,
-					lt_name,
-					giftName,
 					tr::marked);
 			}
 		}, [](const MTPDstarGift &) {
@@ -6597,6 +6650,85 @@ void HistoryItem::setServiceMessageByAction(const MTPmessageAction &action) {
 		return result;
 	};
 
+	auto prepareNewCreatorPending = [this](const MTPDmessageActionNewCreatorPending &action) {
+		auto result = PreparedServiceText();
+		auto user = _history->owner().user(action.vnew_creator_id().v);
+		result.links.push_back(fromLink());
+		result.links.push_back(user->createOpenLink());
+		result.text = tr::lng_action_new_creator_pending(
+			tr::now,
+			lt_user,
+			tr::link(user->name(), 2),
+			lt_from,
+			fromLinkText(),
+			tr::marked);
+		return result;
+	};
+
+	auto prepareChangeCreator = [this](const MTPDmessageActionChangeCreator &action) {
+		auto result = PreparedServiceText();
+		auto user = _history->owner().user(action.vnew_creator_id().v);
+		result.links.push_back(fromLink());
+		result.links.push_back(user->createOpenLink());
+		result.text = tr::lng_action_change_creator(
+			tr::now,
+			lt_from,
+			fromLinkText(),
+			lt_user,
+			tr::link(user->name(), 2),
+			tr::marked);
+		return result;
+	};
+
+	auto prepareNoForwardsToggle = [this](const MTPDmessageActionNoForwardsToggle &action) {
+		auto result = PreparedServiceText();
+		const auto enabled = mtpIsTrue(action.vnew_value());
+		const auto prevEnabled = mtpIsTrue(action.vprev_value());
+		if (enabled == prevEnabled) {
+			result.text = tr::lng_action_no_forwards_still_disabled(
+				tr::now,
+				tr::marked);
+		} else if (out()) {
+			result.text = (enabled
+				? tr::lng_action_no_forwards_you_disabled
+				: tr::lng_action_no_forwards_you_enabled)(
+					tr::now,
+					tr::marked);
+		} else {
+			result.links.push_back(fromLink());
+			result.text = (enabled
+				? tr::lng_action_no_forwards_disabled
+				: tr::lng_action_no_forwards_enabled)(
+					tr::now,
+					lt_from,
+					fromLinkText(),
+					tr::marked);
+		}
+		return result;
+	};
+
+	auto prepareNoForwardsRequest = [this](const MTPDmessageActionNoForwardsRequest &action) {
+		auto result = PreparedServiceText();
+		const auto nfr = Get<HistoryServiceNoForwardsRequest>();
+		if (nfr && nfr->expired && !nfr->actionTaken) {
+			result.text = tr::lng_action_no_forwards_request_expired(
+				tr::now,
+				tr::marked);
+		} else if (_from->isSelf()) {
+			result.text = tr::lng_action_no_forwards_request_you(
+				tr::now,
+				tr::marked);
+		} else {
+			result.links.push_back(fromLink());
+			result.text = tr::lng_action_no_forwards_request(
+				tr::now,
+				lt_from,
+				fromLinkText(),
+				tr::marked);
+		}
+		return result;
+	};
+
 	setServiceText(action.match(
 		prepareChatAddUserText,
 		prepareChatJoinedByLink,
@@ -6656,14 +6788,17 @@ void HistoryItem::setServiceMessageByAction(const MTPmessageAction &action) {
 		prepareSuggestBirthday,
 		prepareStarGiftPurchaseOffer,
 		prepareStarGiftPurchaseOfferDeclined,
+		prepareNewCreatorPending,
+		prepareChangeCreator,
+		prepareNoForwardsToggle,
+		prepareNoForwardsRequest,
 		PrepareEmptyText<MTPDmessageActionRequestedPeerSentMe>,
 		PrepareErrorText<MTPDmessageActionEmpty>));
 
-	// Additional information.
-	applyAction(action);
+	processAction(action);
 }
 
-void HistoryItem::applyAction(const MTPMessageAction &action) {
+void HistoryItem::processAction(const MTPMessageAction &action) {
 	action.match([&](const MTPDmessageActionChatAddUser &data) {
 		if (const auto channel = _history->peer->asMegagroup()) {
 			const auto selfUserId = _history->session().userId();
@@ -6917,6 +7052,7 @@ void HistoryItem::applyAction(const MTPMessageAction &action) {
 			.refunded = data.is_refunded(),
 			.upgrade = data.is_upgrade(),
 			.saved = data.is_saved(),
+			.craft = data.is_craft(),
 		};
 		if (auto gift = Api::FromTL(&history()->session(), data.vgift())) {
 			fields.stargiftId = gift->id;
@@ -6932,6 +7068,7 @@ void HistoryItem::applyAction(const MTPMessageAction &action) {
 				unique->exportAt = data.vcan_export_at().value_or_empty();
 				unique->canTransferAt = data.vcan_transfer_at().value_or_empty();
 				unique->canResellAt = data.vcan_resell_at().value_or_empty();
+				unique->canCraftAt = data.vcan_craft_at().value_or_empty();
 			}
 		}
 		_media = std::make_unique<Data::MediaGiftBox>(

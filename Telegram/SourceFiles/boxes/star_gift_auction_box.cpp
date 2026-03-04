@@ -952,7 +952,7 @@ void AuctionBidBox(not_null<GenericBox*> box, AuctionBidBoxArgs &&args) {
 			lt_gift,
 			tr::bold(name),
 			tr::marked),
-		helper.context());
+		helper.context()).widget;
 }
 
 [[nodiscard]] object_ptr<TableLayout> AuctionInfoTable(
@@ -1193,7 +1193,7 @@ void AuctionGotGiftsBox(
 		).append(' ').append(
 			helper.paletteDependent(
 				Text::CustomEmojiTextBadge(
-					'#' + QString::number(entry.position),
+					'#' + Lang::FormatCountDecimal(entry.position),
 					st::defaultTableSmallButton)));
 		AddTableRow(
 			table,
@@ -1304,7 +1304,7 @@ void AuctionInfoBox(
 
 	struct State {
 		explicit State(not_null<Main::Session*> session)
-			: delegate(session, GiftButtonMode::Minimal) {
+		: delegate(session, GiftButtonMode::Minimal) {
 		}
 
 		Delegate delegate;
@@ -1823,7 +1823,7 @@ TextWithEntities ActiveAuctionsTitle(const Data::ActiveAuctions &auctions) {
 		).append(' ').append(tr::lng_auction_bar_active(tr::now));
 	}
 	auto result = tr::marked();
-	for (const auto auction : list | ranges::views::take(3)) {
+	for (const auto &auction : list | ranges::views::take(3)) {
 		result.append(Data::SingleCustomEmoji(auction->gift->document));
 	}
 	return result.append(' ').append(
@@ -1851,7 +1851,7 @@ ManyAuctionsState ActiveAuctionsState(const Data::ActiveAuctions &auctions) {
 		return { std::move(text), !position };
 	}
 	auto outbid = 0;
-	for (const auto auction : list) {
+	for (const auto &auction : list) {
 		if (!winning(auction)) {
 			++outbid;
 		}
@@ -2036,7 +2036,7 @@ Fn<void()> ActiveAuctionsCallback(
 			.ends = state.nextRoundAt ? state.nextRoundAt : state.endDate,
 		};
 	};
-	for (const auto auction : list) {
+	for (const auto &auction : list) {
 		state->list.push_back(singleFrom(*auction));
 	}
 	return [=] {

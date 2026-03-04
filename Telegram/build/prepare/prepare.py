@@ -452,7 +452,7 @@ if customRunCommand:
 stage('patches', """
     git clone https://github.com/desktop-app/patches.git
     cd patches
-    git checkout b8c3a8ffc1514861837b9213383133c63023e0de
+    git checkout 4519c85c924b9da81f29d4aac045886f896ee479
 """)
 
 stage('msys64', """
@@ -1580,7 +1580,7 @@ mac:
     make install
 """)
 else: # qt > '6'
-    branch = 'v$QT' + ('-lts-lgpl' if qt.startswith('6.2.') else '')
+    branch = 'v$QT' + ('-lts-lgpl' if qt.startswith('6.2.') else '-rc1')
     stage('qt_' + qt, """
     git clone -b """ + branch + """ https://github.com/qt/qt5.git qt_$QT
     cd qt_$QT

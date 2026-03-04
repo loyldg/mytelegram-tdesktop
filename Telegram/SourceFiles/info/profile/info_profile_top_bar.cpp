@@ -116,6 +116,7 @@ public:
 	: Ui::AbstractButton(parent)
 	, _hasStories(std::move(hasStories)) {
 		installEventFilter(this);
+		setAccessibleName(tr::lng_mediaview_profile_photo(tr::now));
 	}
 
 	QString tooltipText() const override {
@@ -701,6 +702,7 @@ void TopBar::setupActions(not_null<Window::SessionController*> controller) {
 			moreButton->setClickedCallback([=] {
 				showTopBarMenu(controller, false);
 			});
+			moreButton->setAccessibleName(tr::lng_profile_action_short_more(tr::now));
 			_actionMore = moreButton;
 			_actions->add(moreButton);
 			buttons.push_back(moreButton);
@@ -751,10 +753,11 @@ void TopBar::setupActions(not_null<Window::SessionController*> controller) {
 				peer->id,
 				Window::SectionShow::Way::Forward);
 		});
+		message->setAccessibleName(tr::lng_profile_action_short_message(tr::now));
 		buttons.push_back(message);
 		_actions->add(message);
 	}
-	const auto canJoin = (!topic && channel && !channel->amIn());
+	const auto canJoin = (!sublist && !topic && channel && !channel->amIn());
 	if (canJoin) {
 		const auto join = Ui::CreateChild<TopBarActionButton>(
 			this,
@@ -763,6 +766,7 @@ void TopBar::setupActions(not_null<Window::SessionController*> controller) {
 		join->setClickedCallback([=] {
 			channel->session().api().joinChannel(channel);
 		});
+		join->setAccessibleName(tr::lng_profile_action_short_join(tr::now));
 		buttons.push_back(join);
 		_actions->add(join);
 	} else if (const auto channel = peer->monoforumBroadcast()) {
@@ -775,6 +779,7 @@ void TopBar::setupActions(not_null<Window::SessionController*> controller) {
 				channel,
 				Window::SectionShow::Way::Forward);
 		});
+		message->setAccessibleName(tr::lng_profile_action_short_channel(tr::now));
 		buttons.push_back(message);
 		_actions->add(message);
 	}
@@ -783,6 +788,7 @@ void TopBar::setupActions(not_null<Window::SessionController*> controller) {
 			this,
 			tr::lng_profile_action_short_mute(tr::now),
 			st::infoProfileTopBarActionMessage);
+		notifications->setAccessibleName(tr::lng_profile_action_short_mute(tr::now));
 		notifications->convertToToggle(
 			st::infoProfileTopBarActionUnmute,
 			st::infoProfileTopBarActionMute,
@@ -800,9 +806,11 @@ void TopBar::setupActions(not_null<Window::SessionController*> controller) {
 			: NotificationsEnabledValue(peer)
 		) | rpl::on_next([=](bool enabled) {
 			notifications->toggle(enabled);
-			notifications->setText(enabled
+			const auto text = enabled
 				? tr::lng_profile_action_short_mute(tr::now)
-				: tr::lng_profile_action_short_unmute(tr::now));
+				: tr::lng_profile_action_short_unmute(tr::now);
+			notifications->setText(text);
+			notifications->setAccessibleName(text);
 		}, notifications->lifetime());
 		notifications->finishAnimating();
 
@@ -863,6 +871,7 @@ void TopBar::setupActions(not_null<Window::SessionController*> controller) {
 		call->setClickedCallback([=] {
 			Core::App().calls().startOutgoingCall(user, {});
 		});
+		call->setAccessibleName(tr::lng_profile_action_short_call(tr::now));
 		buttons.push_back(call);
 		_actions->add(call);
 	}
@@ -885,13 +894,14 @@ void TopBar::setupActions(not_null<Window::SessionController*> controller) {
 				chat,
 				Window::SectionShow::Way::Forward);
 		});
+		discuss->setAccessibleName(tr::lng_profile_action_short_discuss(tr::now));
 		_actions->add(discuss);
 		buttons.push_back(discuss);
 	}
 	if (chechMax()) {
 		return;
 	}
-	if ((topic && topic->canEdit()) || EditPeerInfoBox::Available(peer)) {
+	if (topic ? topic->canEdit() : EditPeerInfoBox::Available(peer)) {
 		const auto manage = Ui::CreateChild<TopBarActionButton>(
 			this,
 			tr::lng_profile_action_short_manage(tr::now),
@@ -907,6 +917,7 @@ void TopBar::setupActions(not_null<Window::SessionController*> controller) {
 				window->showEditPeerBox(peer);
 			}
 		});
+		manage->setAccessibleName(tr::lng_profile_action_short_manage(tr::now));
 		buttons.push_back(manage);
 		_actions->add(manage);
 	}
@@ -935,6 +946,7 @@ void TopBar::setupActions(not_null<Window::SessionController*> controller) {
 			giftButton->setClickedCallback([=] {
 				Ui::ShowStarGiftBox(controller, peer);
 			});
+			giftButton->setAccessibleName(tr::lng_profile_action_short_gift(tr::now));
 			_actions->add(giftButton);
 			buttons.push_back(giftButton);
 		}
@@ -956,22 +968,21 @@ void TopBar::setupActions(not_null<Window::SessionController*> controller) {
 		reportButton->setClickedCallback([=] {
 			ShowReportMessageBox(show, peer, {}, {});
 		});
+		reportButton->setAccessibleName(tr::lng_profile_action_short_report(tr::now));
 		_actions->add(reportButton);
 		buttons.push_back(reportButton);
 	}
 	if (chechMax()) {
 		return;
 	}
-	if (!topic && !sublist && channel && channel->amIn()) {
+	if (!canJoin && !topic && !sublist && (chat || channel)) {
 		const auto leaveButton = Ui::CreateChild<TopBarActionButton>(
 			this,
 			tr::lng_profile_action_short_leave(tr::now),
 			st::infoProfileTopBarActionLeave);
-		leaveButton->setClickedCallback([=] {
-			if (!controller->showFrozenError()) {
-				controller->show(Box(DeleteChatBox, peer));
-			}
-		});
+		leaveButton->setClickedCallback(
+			Window::DeleteAndLeaveHandler(controller, peer));
+		leaveButton->setAccessibleName(tr::lng_profile_action_short_leave(tr::now));
 		_actions->add(leaveButton);
 		buttons.push_back(leaveButton);
 	}
@@ -1328,9 +1339,8 @@ void TopBar::setupUniqueBadgeTooltip() {
 		if (!collectible || _localCollectible) {
 			return;
 		}
-		const auto parent = window();
 		_badgeTooltip = std::make_unique<BadgeTooltip>(
-			parent,
+			this,
 			collectible,
 			widget);
 		const auto raw = _badgeTooltip.get();
@@ -1867,6 +1877,7 @@ void TopBar::setupButtons(
 			st::infoTopBarScale);
 		_back->QWidget::show();
 		_back->setDuration(0);
+		_back->entity()->setAccessibleName(tr::lng_go_back(tr::now));
 		_back->toggleOn(isLayer || isSide
 			? (_backToggles.value() | rpl::type_erased)
 			: rpl::single(wrap == Wrap::Narrow));
@@ -1882,6 +1893,7 @@ void TopBar::setupButtons(
 				shouldUseColored
 					? st::infoTopBarColoredClose
 					: st::infoTopBarBlackClose);
+			_close->setAccessibleName(tr::lng_sr_close_panel(tr::now));
 			_close->show();
 			_close->addClickHandler(isSide
 				? Fn<void()> ([=] { controller->closeThirdSection(); })
@@ -1919,6 +1931,7 @@ void TopBar::addTopBarEditButton(
 	_topBarButton->addClickHandler([=] {
 		controller->showSettings(::Settings::InformationId());
 	});
+	_topBarButton->setAccessibleName(tr::lng_settings_information(tr::now));
 
 	widthValue() | rpl::on_next([=] {
 		if (_close) {
@@ -1958,10 +1971,11 @@ void TopBar::showTopBarMenu(
 	}
 	_peerMenu->setForcedOrigin(Ui::PanelAnimation::Origin::TopRight);
 	_peerMenu->popup(_actionMore
-		? _actionMore->mapToGlobal(
-			QPoint(
+		? Ui::PopupMenu::ConstrainToParentScreen(
+			_peerMenu,
+			_actionMore->mapToGlobal(QPoint(
 				_actionMore->width() + _peerMenu->st().shadow.extend.right(),
-				_actionMore->height() + st::infoProfileTopBarActionMenuSkip))
+				_actionMore->height() + st::infoProfileTopBarActionMenuSkip)))
 		: QCursor::pos());
 }
 
@@ -2312,6 +2326,18 @@ void TopBar::setupNewGifts(
 		}
 		entry.position = positions[i];
 		entry.button = base::make_unique_q<Ui::AbstractButton>(this);
+		entry.button->setAccessibleName([&] {
+			const auto base = tr::lng_profile_action_short_gift(tr::now);
+
+			if (const auto &unique = gift.info.unique) {
+				const auto name = Data::UniqueGiftName(*unique);
+				if (!name.isEmpty()) {
+					return base + ": " + name;
+				}
+			}
+
+			return base;
+		}());
 		entry.button->show();
 
 		entry.button->setClickedCallback([=, giftData = gift, peer = _peer] {

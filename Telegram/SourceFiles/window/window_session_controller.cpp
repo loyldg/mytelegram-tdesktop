@@ -61,6 +61,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_peer_values.h"
 #include "data/data_premium_limits.h"
 #include "data/data_web_page.h"
+#include "data/data_search_calendar.h"
 #include "dialogs/ui/chat_search_in.h"
 #include "passport/passport_form_controller.h"
 #include "chat_helpers/tabbed_selector.h"
@@ -100,6 +101,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "api/api_chat_invite.h"
 #include "api/api_global_privacy.h"
 #include "api/api_blocked_peers.h"
+#include "api/api_premium.h"
+#include "boxes/star_gift_craft_box.h"
 #include "support/support_helper.h"
 #include "storage/file_upload.h"
 #include "storage/download_manager_mtproto.h"
@@ -348,9 +351,9 @@ void DateClickHandler::onClick(ClickContext context) const {
 	const auto my = context.other.value<ClickHandlerContext>();
 	if (const auto window = my.sessionWindow.get()) {
 		if (!_chat.topic()) {
-			window->showCalendar(_chat, _date);
+			window->showCalendar({ _chat, _date, true, true });
 		} else if (const auto strong = _weak.get()) {
-			window->showCalendar(strong, _date);
+			window->showCalendar({ strong, _date, true, true });
 		}
 	}
 }
@@ -1679,6 +1682,50 @@ SessionController::SessionController(
 		activateFirstChatsFilter();
 		setupPremiumToast();
 	});
+
+#if _DEBUG // TEST: Auto-open craft box on startup
+	constexpr auto kGiftsCount = 4;
+	crl::on_main(this, [=] {
+		if (rand() % 2 >= 0) {
+			return;
+		}
+		const auto user = session->user();
+		session->api().request(MTPpayments_GetSavedStarGifts(
+			MTP_flags(MTPpayments_GetSavedStarGifts::Flag::f_exclude_unlimited),
+			user->input(),
+			MTP_int(0),
+			MTP_string(QString()),
+			MTP_int(50)
+		)).done([=](const MTPpayments_SavedStarGifts &result) {
+			const auto &data = result.data();
+			session->data().processUsers(data.vusers());
+			session->data().processChats(data.vchats());
+
+			auto craftableGifts = std::vector<Ui::GiftForCraftEntry>();
+			craftableGifts.reserve(kGiftsCount);
+
+			for (const auto &gift : data.vgifts().v) {
+				if (auto parsed = Api::FromTL(user, gift)) {
+					const auto unique = parsed->info.unique;
+					if (unique
+						&& unique->craftChancePermille > 0
+						&& unique->canCraftAt <= base::unixtime::now()) {
+						craftableGifts.push_back({
+							unique,
+							parsed->manageId,
+						});
+						if (craftableGifts.size() >= kGiftsCount) {
+							break;
+						}
+					}
+				}
+			}
+			if (!craftableGifts.empty()) {
+				Ui::ShowTestGiftCraftBox(this, std::move(craftableGifts));
+			}
+		}).send();
+	});
+#endif
 }
 
 bool SessionController::skipNonPremiumLimitToast(bool download) const {
@@ -2629,7 +2676,9 @@ void SessionController::startOrJoinGroupCall(
 	Core::App().calls().startOrJoinGroupCall(uiShow(), peer, args);
 }
 
-void SessionController::showCalendar(Dialogs::Key chat, QDate requestedDate) {
+void SessionController::showCalendar(ShowCalendarDescriptor &&descriptor) {
+	const auto chat = descriptor.chat;
+	const auto requestedDate = descriptor.date;
 	const auto topic = chat.topic();
 	const auto history = chat.owningHistory();
 	if (!history) {
@@ -2762,9 +2811,50 @@ void SessionController::showCalendar(Dialogs::Key chat, QDate requestedDate) {
 			button->setPointerCursor(false);
 		}
 	};
+	struct SearchCalendarResult {
+		Fn<void(QDate, Ui::CalendarImageSetter)> factory;
+		Fn<void(const QDate &, Fn<void()>)> customJump;
+	};
+	const auto searchCalendarResult = [&]() -> SearchCalendarResult {
+		using Factory = Fn<void(QDate, Ui::CalendarImageSetter)>;
+		using CustomJump = Fn<void(const QDate &, Fn<void()>)>;
+		if (!descriptor.mediaPhoto && !descriptor.mediaVideo) {
+			return {};
+		}
+		const auto search = std::make_shared<Api::SearchCalendarController>(
+			&session(),
+			history->peer->id,
+			(descriptor.mediaPhoto && descriptor.mediaVideo)
+				? Storage::SharedMediaType::PhotoVideo
+				: descriptor.mediaPhoto
+				? Storage::SharedMediaType::Photo
+				: Storage::SharedMediaType::Video);
+		const auto factory = [=](QDate date, Ui::CalendarImageSetter set) {
+			search->monthThumbnails(
+				base::unixtime::serialize(QDateTime(date, QTime())),
+				[=](const std::vector<Api::DayThumbnail> &thumbnails) {
+					for (const auto &thumb : thumbnails) {
+						set(
+							base::unixtime::parse(thumb.date).date(),
+							thumb.image);
+					}
+				});
+		};
+		auto customJump = CustomJump(nullptr);
+		if (const auto performJump = descriptor.customJump) {
+			customJump = [=](const QDate &d, Fn<void()> close) {
+				const auto date = base::unixtime::serialize(
+					QDateTime(d, QTime()));
+				if (const auto msgId = search->resolveMsgIdByDate(date)) {
+					performJump(*msgId, close);
+				}
+			};
+		}
+		return { Factory(factory), std::move(customJump) };
+	}();
 	const auto weak = base::make_weak(this);
 	const auto weakTopic = base::make_weak(topic);
-	const auto jump = [=](const QDate &date) {
+	const auto jump = [=](const QDate &date, Fn<void()> close) {
 		const auto open = [=](not_null<PeerData*> peer, MsgId id) {
 			if (const auto strong = weak.get()) {
 				if (!topic) {
@@ -2785,14 +2875,19 @@ void SessionController::showCalendar(Dialogs::Key chat, QDate requestedDate) {
 			session().api().resolveJumpToDate(chat, date, open);
 		}
 	};
+	const auto requireImage = !!searchCalendarResult.customJump;
 	show(Box<Ui::CalendarBox>(Ui::CalendarBoxArgs{
 		.month = highlighted,
 		.highlighted = highlighted,
-		.callback = [=](const QDate &date) { jump(date); },
+		.callback = searchCalendarResult.customJump
+			? std::move(searchCalendarResult.customJump)
+			: jump,
 		.minDate = minPeerDate,
 		.maxDate = maxPeerDate,
 		.allowsSelection = history->peer->isUser(),
 		.selectionChanged = selectionChanged,
+		.dynamicImageForDate = std::move(searchCalendarResult.factory),
+		.requireImage = requireImage,
 	}));
 }
 

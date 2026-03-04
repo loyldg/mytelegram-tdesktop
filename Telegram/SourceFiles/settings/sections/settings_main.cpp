@@ -139,7 +139,7 @@ Cover::Cover(
 , _user(user)
 , _badge(
 	this,
-	st::infoPeerBadge,
+	st::settingsCoverBadge,
 	&user->session(),
 	Info::Profile::BadgeContentForPeer(user),
 	&_emojiStatusPanel,
@@ -280,7 +280,7 @@ void Cover::refreshNameGeometry(int newWidth) {
 	const auto nameLeft = st::settingsNameLeft;
 	const auto nameTop = st::settingsNameTop;
 	const auto qrButtonWidth = (_qrButton && !_qrButton->isHidden())
-		? (_qrButton->width() + st::settingsNameLeft)
+		? (_qrButton->width() + st::infoProfileCover.rightSkip)
 		: 0;
 	auto nameWidth = newWidth
 		- nameLeft
@@ -721,7 +721,7 @@ void Main::showFinished() {
 	if (controller()->takeHighlightControlId(emojiId)) {
 		if (const auto popupMenu = _userpic->showChangePhotoMenu()) {
 			const auto menu = popupMenu->menu();
-			for (const auto action : menu->actions()) {
+			for (const auto &action : menu->actions()) {
 				const auto controlId = "highlight-control-id";
 				if (action->property(controlId).toString() == emojiId) {
 					if (const auto item = menu->itemForAction(action)) {
