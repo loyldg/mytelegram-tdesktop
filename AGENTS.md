@@ -1,4 +1,4 @@
-﻿# Agent Guide for Telegram Desktop
+# Agent Guide for Telegram Desktop
 
 This guide defines repository-wide instructions for coding agents working with the Telegram Desktop codebase.
 
@@ -95,6 +95,21 @@ Retrying builds wastes time and context. The ONLY fix is for the user to close t
 
 1. **Always use Debug builds** - Release builds are extremely heavy
 2. **Don't build Release configuration** - it's too heavy for testing
+
+## Text File Format
+
+- On Windows, keep project text files with CRLF line endings.
+- Do not save source, header, build/config, style, or localization files as UTF-8 with BOM. Use UTF-8 without BOM.
+- When rewriting project text files for normalization, preserve file content otherwise and do not introduce a BOM.
+
+## Local Storage Serialization
+
+Both app-level (`Core::Settings`) and session-level (`Main::SessionSettings`) use sequential binary serialization via `QDataStream`. Key rules:
+
+- New fields must ALWAYS be appended at the **end** of the stream, never inserted in the middle
+- Reading new fields must be guarded with `!stream.atEnd()` and provide a meaningful default/fallback
+- Inserting in the middle breaks reading of data saved by older versions (the new read code consumes bytes that belong to subsequent fields)
+- For simple flags and values, prefer using the generic KV prefs facility (`writePref<Type>` / `readPref<Type>`) instead of adding to the binary stream -- this avoids serialization ordering issues entirely
 
 ---
 
@@ -336,15 +351,25 @@ auto filesTextProducer = tr::lng_files_selected(
 - Placeholders use `lt_tag_name, value` pattern
 - For `{count}`: immediate uses `int`, reactive uses `rpl::producer<float64>` with `| tr::to_count()`
 - Move producers with `std::move` when passing to placeholders
-- Rich text projectors — pass as the last argument to produce `TextWithEntities` instead of `QString`. These are smart objects with multiple `operator()` overloads:
+- Rich text projectors — these `tr::` helpers serve double duty: as the **last argument** (projector) they set the return type to `TextWithEntities`, and as **placeholder values** they wrap individual substitutions in formatting. Always prefer them over `Ui::Text::Bold()`, `Ui::Text::RichLangValue`, etc. — see REVIEW.md for the full mapping.
   - `tr::marked` — basic projection, converts `QString` to `TextWithEntities`
   - `tr::rich` — interprets `**bold**`/`__italic__` markup in the string
   - `tr::bold`, `tr::italic`, `tr::underline` — wrap text in that formatting
   - `tr::link` — wrap as a clickable link
   - `tr::url(u"https://..."_q)` — returns a projection that converts text to a link pointing to the given URL; can be passed to `rpl::map` or directly to a `tr::lng_...` call
   ```cpp
+  // As last argument (projector):
   auto title = tr::lng_export_progress_title(tr::now, tr::bold);
   auto text = tr::lng_proxy_incorrect_secret(tr::now, tr::rich);
+  // As placeholder value wrapper + projector:
+  auto desc = tr::lng_some_key(
+      tr::now,
+      lt_name,
+      tr::bold(userName),
+      lt_group,
+      tr::bold(groupName),
+      tr::rich);
+  // Nested tr::lng as placeholder:
   auto linked = tr::lng_settings_birthday_contacts(
       lt_link,
       tr::lng_settings_birthday_contacts_link(tr::url(link)),

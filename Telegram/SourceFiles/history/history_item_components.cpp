@@ -361,6 +361,8 @@ ReplyFields ReplyFields::clone(not_null<HistoryItem*> parent) const {
 		.messageId = messageId,
 		.topMessageId = topMessageId,
 		.storyId = storyId,
+		.todoItemId = todoItemId,
+		.pollOption = pollOption,
 		.quoteOffset = quoteOffset,
 		.manualQuote = manualQuote,
 		.topicPost = topicPost,
@@ -389,6 +391,7 @@ ReplyFields ReplyFieldsFromMTP(
 			result.topicPost = data.is_forum_topic() ? 1 : 0;
 		}
 		result.todoItemId = data.vtodo_item_id().value_or_empty();
+		result.pollOption = data.vpoll_option().value_or_empty();
 		if (const auto header = data.vreply_from()) {
 			const auto &data = header->data();
 			result.externalPostAuthor
@@ -443,6 +446,8 @@ FullReplyTo ReplyToFromMTP(
 				data.vquote_entities().value_or_empty()),
 		};
 		result.quoteOffset = data.vquote_offset().value_or_empty();
+		result.todoItemId = data.vtodo_item_id().value_or_empty();
+		result.pollOption = data.vpoll_option().value_or_empty();
 		return result;
 	}, [&](const MTPDinputReplyToStory &data) {
 		if (const auto parsed = Data::PeerFromInputMTP(
@@ -783,7 +788,10 @@ ReplyKeyboard::ReplyKeyboard(
 					auto result = TextWithEntities();
 					if (const auto iconId = row[j].visual.iconId) {
 						using namespace Data;
-						result.append(SingleCustomEmoji(iconId)).append(' ');
+						result.append(SingleCustomEmoji(iconId));
+						if (!text.isEmpty()) {
+							result.append(' ');
+						}
 					}
 					if (type == Type::Buy) {
 						auto firstPart = true;
@@ -1281,7 +1289,8 @@ bool HistoryMessageReplyMarkup::hiddenBy(Data::Media *media) const {
 void HistoryMessageReplyMarkup::updateSuggestControls(
 		SuggestionActions actions) {
 	if (actions == SuggestionActions::AcceptAndDecline
-		|| actions == SuggestionActions::GiftOfferActions) {
+		|| actions == SuggestionActions::GiftOfferActions
+		|| actions == SuggestionActions::NoForwardsRequest) {
 		data.flags |= ReplyMarkupFlag::SuggestionAccept;
 	} else {
 		data.flags &= ~ReplyMarkupFlag::SuggestionAccept;
@@ -1314,6 +1323,19 @@ void HistoryMessageReplyMarkup::updateSuggestControls(
 			{
 				Type::SuggestAccept,
 				tr::lng_action_gift_offer_accept(tr::now),
+				Visual(),
+			},
+		});
+	} else if (actions == SuggestionActions::NoForwardsRequest) {
+		data.rows.push_back({
+			{
+				Type::SuggestDecline,
+				tr::lng_action_no_forwards_reject(tr::now),
+				Visual(),
+			},
+			{
+				Type::SuggestAccept,
+				tr::lng_action_no_forwards_accept(tr::now),
 				Visual(),
 			},
 		});

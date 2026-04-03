@@ -697,6 +697,16 @@ void InnerWidget::elementShowPollResults(
 	FullMsgId context) {
 }
 
+void InnerWidget::elementShowAddPollOption(
+	not_null<HistoryView::Element*> view,
+	not_null<PollData*> poll,
+	FullMsgId context,
+	QRect optionRect) {
+}
+
+void InnerWidget::elementSubmitAddPollOption(FullMsgId context) {
+}
+
 void InnerWidget::elementOpenPhoto(
 		not_null<PhotoData*> photo,
 		FullMsgId context) {
@@ -856,7 +866,8 @@ void InnerWidget::preloadMore(Direction direction) {
 			| ((f & LocalFlag::GroupCall) ? Flag::f_group_call : empty)
 			| ((f & LocalFlag::Invites) ? Flag::f_invites : empty)
 			| ((f & LocalFlag::Topics) ? Flag::f_forums : empty)
-			| ((f & LocalFlag::SubExtend) ? Flag::f_sub_extend : empty);
+			| ((f & LocalFlag::SubExtend) ? Flag::f_sub_extend : empty)
+			| ((f & LocalFlag::EditRank) ? Flag::f_edit_rank : empty);
 	}();
 	if (_filter.flags != 0) {
 		flags |= MTPchannels_GetAdminLog::Flag::f_events_filter;
@@ -1579,6 +1590,7 @@ void InnerWidget::suggestRestrictParticipant(
 				user,
 				hasAdminRights,
 				currentRights,
+				QString(),
 				by,
 				since);
 			box->setSaveCallback([=](
@@ -1691,6 +1703,7 @@ void InnerWidget::restrictParticipant(
 		restrictParticipantDone(participant, newRights);
 	};
 	const auto callback = SaveRestrictedCallback(
+		_controller->uiShow(),
 		_channel,
 		participant,
 		crl::guard(this, done),
@@ -2217,6 +2230,9 @@ void InnerWidget::onTouchScrollTimer() {
 		int32 elapsed = int32(nowTime - _touchTime);
 		QPoint delta = _touchSpeed * elapsed / 1000;
 		bool hasScrolled = !delta.isNull();
+		if (hasScrolled) {
+			_scrollToSignal.fire_copy(_visibleTop - delta.y());
+		}
 
 		if (_touchSpeed.isNull() || !hasScrolled) {
 			_touchScrollState = Ui::TouchScrollState::Manual;
@@ -2418,6 +2434,7 @@ void InnerWidget::touchEvent(QTouchEvent *e) {
 
 void InnerWidget::touchScrollUpdated(const QPoint &screenPos) {
 	_touchPos = screenPos;
+	_scrollToSignal.fire_copy(_visibleTop - (_touchPos - _touchPrevPos).y());
 	touchUpdateSpeed();
 }
 
