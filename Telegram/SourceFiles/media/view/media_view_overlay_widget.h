@@ -223,6 +223,7 @@ private:
 	bool handleTouchEvent(not_null<QTouchEvent*> e);
 	void handleWheelEvent(not_null<QWheelEvent*> e);
 	void handleKeyPress(not_null<QKeyEvent*> e);
+	void handleKeyRelease(not_null<QKeyEvent*> e);
 
 	void toggleApplicationEventFilter(bool install);
 	bool filterApplicationEvent(
@@ -517,6 +518,18 @@ private:
 		bool nonbright = false) const;
 	[[nodiscard]] bool isSaveMsgShown() const;
 
+	void showChapterIndicator(const QString &name, int direction);
+	void paintChapterContent(Painter &p, QRect outer, QRect clip);
+	[[nodiscard]] bool isChapterShown() const;
+	void updateChapter();
+
+	void startSpeedBoost();
+	void stopSpeedBoost();
+	void updateSpeedBoostRect();
+	void paintSpeedBoostContent(Painter &p, QRect outer, QRect clip);
+	[[nodiscard]] bool isSpeedBoostShown() const;
+	void updateSpeedBoost();
+
 	void updateOverRect(Over state);
 	bool updateOverState(Over newState);
 	float64 overLevel(Over control) const;
@@ -773,6 +786,28 @@ private:
 	// _saveMsgAnimation -> _saveMsgTimer -> _saveMsgAnimation.
 	Ui::Animations::Simple _saveMsgAnimation;
 	base::Timer _saveMsgTimer;
+
+	QString _chapterText;
+	QRect _chapterRect;
+	Ui::Animations::Simple _chapterAnimation;
+	base::Timer _chapterTimer;
+	struct ChapterArrow {
+		Ui::Animations::Simple animation;
+		int direction = 0;
+	};
+	std::vector<std::unique_ptr<ChapterArrow>> _chapterArrows;
+
+	bool _speedBoostActive = false;
+	bool _speedBoostFromMouse = false;
+	float64 _speedBoostSavedSpeed = 1.;
+	float64 _speedBoostSpeed = 2.;
+	float64 _speedBoostDragAccum = 0.;
+	QRect _speedBoostRect;
+	Ui::Animations::Simple _speedBoostAnimation;
+	base::Timer _speedBoostHoldTimer;
+	Ui::Animations::Basic _speedBoostTicker;
+	float64 _speedBoostPhase = 0.;
+	crl::time _speedBoostLastFrame = 0;
 
 	base::flat_map<Over, crl::time> _animations;
 	base::flat_map<Over, anim::value> _animationOpacities;

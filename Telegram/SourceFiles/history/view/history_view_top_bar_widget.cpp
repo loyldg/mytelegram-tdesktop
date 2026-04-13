@@ -132,6 +132,11 @@ TopBarWidget::TopBarWidget(
 , _onlineUpdater([=] { updateOnlineDisplay(); }) {
 	setAttribute(Qt::WA_OpaquePaintEvent);
 
+	_clear->setTextTransform(Ui::RoundButtonTextTransform::ToUpper);
+	_forward->setTextTransform(Ui::RoundButtonTextTransform::ToUpper);
+	_sendNow->setTextTransform(Ui::RoundButtonTextTransform::ToUpper);
+	_delete->setTextTransform(Ui::RoundButtonTextTransform::ToUpper);
+
 	Lang::Updated(
 	) | rpl::on_next([=] {
 		refreshLang();
@@ -1023,8 +1028,13 @@ int TopBarWidget::countSelectedButtonsTop(float64 selectedShown) {
 }
 
 void TopBarWidget::updateSearchVisibility() {
+	const auto pinnedInSavedMessages = (_activeChat.section == Section::Pinned)
+		&& _activeChat.key.peer()
+		&& _activeChat.key.peer()->isSelf();
 	const auto searchAllowedMode = (_activeChat.section == Section::History)
 		|| (_activeChat.section == Section::Replies)
+		|| (_activeChat.section == Section::Pinned
+			&& !pinnedInSavedMessages)
 		|| (_activeChat.section == Section::SavedSublist
 			&& _activeChat.key.sublist());
 	_search->setVisible(searchAllowedMode && !_chooseForReportReason);
@@ -1076,6 +1086,36 @@ void TopBarWidget::updateControlsGeometry() {
 	}
 
 	_delete->moveToLeft(buttonsLeft, selectedButtonsTop);
+	{
+		const auto large = st::topBarActionButtonLargeRadius;
+		const auto &buttonSt = st::defaultActiveButton;
+		const auto small = buttonSt.radius
+			? buttonSt.radius
+			: st::buttonRadius;
+		const auto buttons = std::array{
+			_forward.data(),
+			_sendNow.data(),
+			_delete.data(),
+		};
+		auto first = (Ui::RoundButton*)(nullptr);
+		auto last = (Ui::RoundButton*)(nullptr);
+		for (const auto button : buttons) {
+			if (!button->isHidden()) {
+				if (!first) {
+					first = button;
+				}
+				last = button;
+			}
+		}
+		for (const auto button : buttons) {
+			if (button->isHidden()) {
+				continue;
+			}
+			const auto left = (button == first) ? large : small;
+			const auto right = (button == last) ? large : small;
+			button->setCornerRadii(left, right, left, right);
+		}
+	}
 	_clear->moveToRight(st::topBarActionSkip, selectedButtonsTop);
 
 	if (!_cancelChoose->isHidden()) {
@@ -1383,7 +1423,8 @@ void TopBarWidget::showSelected(SelectedState state) {
 			_delete->finishNumbersAnimation();
 		}
 	}
-	if (visibilityChanged) {
+	if (visibilityChanged
+		|| (!wasSelectedState && nowSelectedState)) {
 		updateControlsVisibility();
 	}
 	if (wasSelectedState != nowSelectedState && !_chooseForReportReason) {
