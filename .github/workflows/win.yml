@@ -1,6 +1,7 @@
 name: Windows.
 
 on:
+  workflow_dispatch:
   push:
     paths-ignore:
       - 'docs/**'
@@ -44,16 +45,13 @@ jobs:
 
   windows:
     name: Windows
-    runs-on: ${{ matrix.arch == 'arm64' && 'windows-11-arm' || 'windows-latest' }}
+    runs-on: windows-latest
 
     strategy:
       matrix:
-        arch: [x64_x86, x64, arm64]
-        qt: ["", qt6]
-        generator: ["", "Ninja Multi-Config"]
-        exclude:
-          - arch: arm64
-            qt: ""
+        arch: [x64]
+        qt: [qt6]
+        generator: ["Ninja Multi-Config"]
 
     env:
       UPLOAD_ARTIFACT: "true"
@@ -156,11 +154,7 @@ jobs:
 
           ARCH=""
           if [ -n "${{ matrix.arch }}" ]; then
-            case "${{ matrix.arch }}" in
-              x64_x86) ARCH="x86";;
-              arm64) ARCH="arm";;
-              *) ARCH="${{ matrix.arch }}";;
-            esac
+            ARCH="${{ matrix.arch }}"
             echo "Architecture from matrix: $ARCH"
             ARTIFACT_NAME="${ARTIFACT_NAME} ${{ matrix.arch }}"
           fi
