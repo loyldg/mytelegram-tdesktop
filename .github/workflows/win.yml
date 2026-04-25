@@ -51,7 +51,7 @@ jobs:
       matrix:
         arch: [x64]
         qt: [qt6]
-        generator: ["Ninja Multi-Config"]
+        generator: [""]
 
     env:
       UPLOAD_ARTIFACT: "true"
@@ -65,14 +65,16 @@ jobs:
     steps:
       - name: Prepare directories.
         run: |
-          mkdir %userprofile%\TBuild\Libraries
-          mklink /d %GITHUB_WORKSPACE%\TBuild %userprofile%\TBuild
-          echo TBUILD=%GITHUB_WORKSPACE%\TBuild>>%GITHUB_ENV%
-          echo LibrariesPath=%GITHUB_WORKSPACE%\TBuild\Libraries${{ matrix.arch == 'x64' && '\win64' || '' }}>>%GITHUB_ENV%
+          set TBUILD_ROOT=C:\T
+          if exist %TBUILD_ROOT% rmdir /s /q %TBUILD_ROOT%
+          mkdir %TBUILD_ROOT%\Libraries
+          mkdir %TBUILD_ROOT%\ThirdParty
+          echo TBUILD=%TBUILD_ROOT%>>%GITHUB_ENV%
+          echo LibrariesPath=%TBUILD_ROOT%\Libraries${{ matrix.arch == 'x64' && '\win64' || '' }}>>%GITHUB_ENV%
 
       - name: Get repository name.
         shell: bash
-        run: echo "REPO_NAME=${GITHUB_REPOSITORY##*/}" >> $GITHUB_ENV
+        run: echo "REPO_NAME=tdesktop" >> $GITHUB_ENV
 
       - name: Clone.
         uses: actions/checkout@v6
