@@ -153,6 +153,7 @@ void HistoryMessageVia::resize(int32 availw) const {
 			tr::now,
 			lt_inline_bot,
 			'@' + bot->username());
+		maxWidth = st::msgServiceNameFont->width(text);
 		if (availw < maxWidth) {
 			text = st::msgServiceNameFont->elided(text, availw);
 			width = st::msgServiceNameFont->width(text);
@@ -1059,7 +1060,8 @@ ClickHandlerPtr ReplyKeyboard::getLink(QPoint point) const {
 
 			if (rect.contains(point)) {
 				if (_item->isAdminLogEntry()
-					&& button.type != HistoryMessageMarkupButton::Type::Url) {
+					&& button.type != HistoryMessageMarkupButton::Type::Url
+					&& button.type != HistoryMessageMarkupButton::Type::Callback) {
 					return ClickHandlerPtr();
 				}
 				_savedCoords = point;

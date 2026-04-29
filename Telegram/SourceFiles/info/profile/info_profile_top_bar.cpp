@@ -1142,6 +1142,7 @@ void TopBar::setupUserpicButton(
 			: (user && !user->isSelf() && !_peer->isBot())
 			? &tr::lng_profile_set_personal_sure
 			: nullptr;
+		const auto useForumShape = _peer->isForum() && !_peer->isBot();
 		return Editor::EditorData{
 			.about = (phrase
 				? (*phrase)(
@@ -1153,7 +1154,9 @@ void TopBar::setupUserpicButton(
 			.confirm = ((type == ChosenType::Suggest)
 				? tr::lng_profile_suggest_button(tr::now)
 				: tr::lng_profile_set_photo_button(tr::now)),
-			.cropType = Editor::EditorData::CropType::Ellipse,
+			.cropType = (useForumShape
+				? Editor::EditorData::CropType::RoundedRect
+				: Editor::EditorData::CropType::Ellipse),
 			.keepAspectRatio = true,
 		};
 	};
@@ -1774,6 +1777,7 @@ void TopBar::paintUserpic(QPainter &p, const QRect &geometry) {
 		const auto size = st::infoProfileTopBarPhotoSize;
 		const auto frame = _videoUserpicPlayer->frame(Size(size), _peer);
 		if (!frame.isNull()) {
+			auto hq = PainterHighQualityEnabler(p);
 			p.drawImage(geometry, frame);
 			update();
 			return;
@@ -1818,7 +1822,10 @@ void TopBar::paintUserpic(QPainter &p, const QRect &geometry) {
 		_cachedUserpic = std::move(image);
 		_cachedUserpic.setDevicePixelRatio(style::DevicePixelRatio());
 	}
-	p.drawImage(geometry, _cachedUserpic);
+	{
+		auto hq = PainterHighQualityEnabler(p);
+		p.drawImage(geometry, _cachedUserpic);
+	}
 	if (_uploadOverlay && _uploadOverlay->shown()) {
 		_uploadOverlay->paint(p, geometry, {
 			.lineWidth = st::defaultUserpicButton.uploadProgressLine,
