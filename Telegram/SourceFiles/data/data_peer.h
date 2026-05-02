@@ -317,6 +317,7 @@ public:
 	[[nodiscard]] rpl::producer<bool> slowmodeAppliedValue() const;
 	[[nodiscard]] int slowmodeSecondsLeft() const;
 	[[nodiscard]] bool canManageGroupCall() const;
+	[[nodiscard]] bool canManageRanks() const;
 	[[nodiscard]] bool amMonoforumAdmin() const;
 
 	[[nodiscard]] int starsPerMessage() const;
@@ -632,7 +633,7 @@ private:
 	crl::time _lastFullUpdate = 0;
 
 	QString _name;
-	uint32 _nameVersion : 29 = 1;
+	uint32 _nameVersion : 16 = 1;
 	uint32 _sensitiveContent : 1 = 0;
 	uint32 _wallPaperOverriden : 1 = 0;
 	uint32 _checkedTrustedPayForMessage : 1 = 0;
@@ -677,6 +678,6 @@ void SetTopPinnedMessageId(
 [[nodiscard]] uint64 BackgroundEmojiIdFromColor(const MTPPeerColor *color);
 [[nodiscard]] std::optional<uint8> ColorIndexFromColor(const MTPPeerColor *);
 
-[[nodiscard]] bool IsBotCanManageTopics(not_null<PeerData*>);
+[[nodiscard]] bool IsBotUserCreatesTopics(not_null<PeerData*>);
 
 } // namespace Data

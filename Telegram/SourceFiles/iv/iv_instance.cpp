@@ -163,7 +163,6 @@ private:
 	base::flat_map<QByteArray, QByteArray> _embeds;
 	base::flat_map<QString, MapPreview> _maps;
 	std::vector<QByteArray> _resources;
-	int _resource = -1;
 
 	rpl::event_stream<Controller::Event> _events;
 
@@ -846,6 +845,10 @@ void Instance::show(
 	if (Platform::IsMac()) {
 		// Otherwise IV is not visible under the media viewer.
 		Core::App().hideMediaView();
+	}
+
+	if (Core::App().settings().normalizeIvZoom()) {
+		Core::App().saveSettingsDelayed();
 	}
 
 	const auto guard = gsl::finally([&] {

@@ -452,7 +452,7 @@ if customRunCommand:
 stage('patches', """
     git clone https://github.com/desktop-app/patches.git
     cd patches
-    git checkout b8c3a8ffc1514861837b9213383133c63023e0de
+    git checkout 4519c85c924b9da81f29d4aac045886f896ee479
 """)
 
 stage('msys64', """
@@ -715,7 +715,7 @@ win:
 
 # Somehow in x86 Debug build dav1d crashes on AV1 10bpc videos.
 stage('dav1d', """
-    git clone -b 1.5.1 https://code.videolan.org/videolan/dav1d.git
+    git clone -b 1.5.3 https://code.videolan.org/videolan/dav1d.git
     cd dav1d
 win32:
     SET "TARGET=x86"
@@ -899,7 +899,7 @@ mac:
 """)
 
 stage('libwebp', """
-    git clone -b v1.5.0 https://github.com/webmproject/libwebp.git
+    git clone -b v1.6.0 https://github.com/webmproject/libwebp.git
     cd libwebp
 win:
     nmake /f Makefile.vc CFG=debug-static OBJDIR=out RTLIBCFG=static all
@@ -938,7 +938,7 @@ mac:
 """)
 
 stage('libheif', """
-    git clone -b v1.19.8 https://github.com/strukturag/libheif.git
+    git clone -b v1.21.2 https://github.com/strukturag/libheif.git
     cd libheif
 win:
     %THIRDPARTY_DIR%\\msys64\\usr\\bin\\sed.exe -i 's/LIBHEIF_EXPORTS/LIBDE265_STATIC_BUILD/g' libheif/CMakeLists.txt
@@ -953,6 +953,7 @@ win:
         -DBUILD_TESTING=OFF ^
         -DENABLE_PLUGIN_LOADING=OFF ^
         -DWITH_LIBDE265=ON ^
+        -DWITH_X264=OFF ^
         -DWITH_OpenH264_DECODER=OFF ^
         -DWITH_SvtEnc=OFF ^
         -DWITH_SvtEnc_PLUGIN=OFF ^
@@ -979,6 +980,7 @@ mac:
         -D WITH_AOM_ENCODER=OFF \\
         -D WITH_AOM_DECODER=OFF \\
         -D WITH_X265=OFF \\
+        -D WITH_X264=OFF \\
         -D WITH_OpenH264_DECODER=OFF \\
         -D WITH_SvtEnc=OFF \\
         -D WITH_RAV1E=OFF \\
@@ -996,7 +998,7 @@ mac:
 """)
 
 stage('libjxl', """
-    git clone -b v0.11.1 --recursive --shallow-submodules https://github.com/libjxl/libjxl.git
+    git clone -b v0.11.2 --recursive --shallow-submodules https://github.com/libjxl/libjxl.git
     cd libjxl
 """ + setVar("cmake_defines", """
     -DBUILD_SHARED_LIBS=OFF
@@ -1493,8 +1495,8 @@ release:
     cd qt_$QT
     git submodule update --init --recursive --progress qtbase qtimageformats qtsvg
 depends:patches/qtbase_""" + qt + """/*.patch
-    cd qtbase
 win:
+    cd qtbase
     setlocal enabledelayedexpansion
     for /r %%i in (..\\..\\patches\\qtbase_%QT%\\*) do (
         git apply %%i -v
@@ -1503,7 +1505,6 @@ win:
             exit /b 1
         )
     )
-
     cd ..
 
     SET CONFIGURATIONS=-debug
@@ -1553,8 +1554,7 @@ win:
     jom -j%NUMBER_OF_PROCESSORS%
     jom -j%NUMBER_OF_PROCESSORS% install
 mac:
-    find ../../patches/qtbase_$QT -type f -print0 | sort -z | xargs -0 git apply
-    cd ..
+    find ../../patches/qtbase_$QT -type f -print0 | sort -z | xargs -0 git -C qtbase apply
 
     CONFIGURATIONS=-debug
 release:
@@ -1586,10 +1586,8 @@ else: # qt > '6'
     cd qt_$QT
     git submodule update --init --recursive --progress qtbase qtimageformats qtsvg
 depends:patches/qtbase_""" + qt + """/*.patch
-    cd qtbase
 mac:
-    find ../../patches/qtbase_$QT -type f -print0 | sort -z | xargs -0 git apply -v
-    cd ..
+    find $PWD/../patches/qtbase_$QT -type f -print0 | sort -z | xargs -0 git -C qtbase apply -v
     sed -i.bak 's/tqtc-//' {qtimageformats,qtsvg}/dependencies.yaml
 
     CONFIGURATIONS=-debug
@@ -1616,6 +1614,7 @@ mac:
     cmake --build .
     cmake --install .
 win:
+    cd qtbase
     for /r %%i in (..\\..\\patches\\qtbase_%QT%\\*) do git apply %%i -v
     cd ..
 
@@ -1678,7 +1677,7 @@ win:
 stage('tg_owt', """
     git clone https://github.com/desktop-app/tg_owt.git
     cd tg_owt
-    git checkout 5c5c71258777d0196dbb3a09cc37d2f56ead28ab
+    git checkout 89df288dd6ba5b2ec95b3c5eaf1e7e0c3a870fc4
     git submodule update --init --recursive
 win:
     SET MOZJPEG_PATH=$LIBS_DIR/mozjpeg

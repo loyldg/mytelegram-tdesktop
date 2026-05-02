@@ -138,11 +138,9 @@ namespace {
 constexpr auto kPriceTabAll = 0;
 constexpr auto kPriceTabMy = -1;
 constexpr auto kPriceTabCollectibles = -2;
-constexpr auto kGiftMessageLimit = 255;
 constexpr auto kSentToastDuration = 3 * crl::time(1000);
 constexpr auto kSwitchUpgradeCoverInterval = 3 * crl::time(1000);
 constexpr auto kUpgradeDoneToastDuration = 4 * crl::time(1000);
-constexpr auto kGiftsPreloadTimeout = 3 * crl::time(1000);
 constexpr auto kResellPriceCacheLifetime = 60 * crl::time(1000);
 
 using namespace HistoryView;
@@ -1332,7 +1330,9 @@ void SendStarsFormRequest(
 				done(Payments::CheckoutResult::Failed, nullptr);
 			});
 		}).fail([=](const MTP::Error &error) {
-			show->showToast(error.type());
+			if (!ShowGiftErrorToast(show, error)) {
+				show->showToast(error.type());
+			}
 			done(Payments::CheckoutResult::Failed, nullptr);
 		}).send();
 	} else if (result == BalanceResult::Cancelled) {
@@ -1379,7 +1379,9 @@ void UpgradeGift(
 			formDone(Payments::CheckoutResult::Paid, &result);
 		}).fail([=](const MTP::Error &error) {
 			if (const auto strong = weak.get()) {
-				strong->showToast(error.type());
+				if (!ShowGiftErrorToast(strong->uiShow(), error)) {
+					strong->showToast(error.type());
+				}
 			}
 			formDone(Payments::CheckoutResult::Failed, nullptr);
 		}).send();
@@ -2141,7 +2143,7 @@ Controller::Controller(not_null<Main::Session*> session, PickCallback pick)
 				return aBirthday.day() < bBirthday.day();
 			});
 
-			for (const auto user : usersWithBirthdays) {
+			for (const auto &user : usersWithBirthdays) {
 				auto row = std::make_unique<PeerRow>(user);
 				if (auto s = status(user->birthday()); !s.isEmpty()) {
 					row->setCustomStatus(std::move(s));
@@ -2860,7 +2862,7 @@ void UpdateGiftSellPrice(
 			const auto newAvailableAt = base::unixtime::now() + seconds;
 			unique->canResellAt = newAvailableAt;
 			ShowResaleGiftLater(show, unique);
-		} else {
+		} else if (!ShowGiftErrorToast(show, error)) {
 			show->showToast(type);
 		}
 	}).send();
@@ -3061,9 +3063,10 @@ void SendOfferBuyGift(
 		show->session().api().applyUpdates(result);
 		done(true);
 	}).fail([=](const MTP::Error &error) {
-		if (error.type() == u""_q) {
-		} else {
-			show->showToast(error.type());
+		const auto type = error.type();
+		if (type == u""_q) {
+		} else if (!ShowGiftErrorToast(show, error)) {
+			show->showToast(type);
 		}
 		done(false);
 	}).send();
@@ -4297,7 +4300,9 @@ void RequestOurForm(
 			show->showToast(tr::lng_edit_privacy_gifts_restricted(tr::now));
 			fail(Payments::CheckoutResult::Cancelled);
 		} else {
-			show->showToast(type);
+			if (!ShowGiftErrorToast(show, error)) {
+				show->showToast(type);
+			}
 			fail(Payments::CheckoutResult::Failed);
 		}
 	}).send();
@@ -4336,6 +4341,16 @@ void ShowGiftTransferredToast(
 				tr::marked),
 		.duration = kUpgradeDoneToastDuration,
 	});
+}
+
+bool ShowGiftErrorToast(
+		std::shared_ptr<Ui::Show> show,
+		const MTP::Error &error) {
+	if (error.type() == u"STARGIFT_ALREADY_BURNED"_q) {
+		show->showToast(tr::lng_gift_burned_message(tr::now));
+		return true;
+	}
+	return false;
 }
 
 CreditsAmount StarsFromTon(

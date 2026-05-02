@@ -14,6 +14,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/call_delayed.h"
 #include "base/platform/base_platform_custom_app_icon.h"
 #include "base/platform/base_platform_info.h"
+#include "base/screen_reader_state.h"
 #include "boxes/about_box.h"
 #include "boxes/auto_download_box.h"
 #include "boxes/connection_box.h"
@@ -52,6 +53,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/platform/ui_platform_window.h"
 #include "ui/power_saving.h"
 #include "ui/rp_widget.h"
+#include "ui/screen_reader_mode.h"
 #include "ui/text/format_values.h"
 #include "ui/ui_utility.h"
 #include "ui/vertical_list.h"
@@ -347,6 +349,70 @@ void BuildWindowTitleSection(SectionBuilder &builder) {
 	builder.addSkip();
 }
 
+#if !defined Q_OS_WIN && !defined Q_OS_MAC
+void BuildWindowCloseBehaviorSection(SectionBuilder &builder) {
+	using Behavior = Core::Settings::CloseBehavior;
+
+	const auto settings = &Core::App().settings();
+	auto shown = Platform::TrayIconSupported()
+		? (Core::App().settings().workModeValue(
+			) | rpl::map([](Core::Settings::WorkMode mode) {
+				return (mode == Core::Settings::WorkMode::WindowOnly);
+			}) | rpl::distinct_until_changed() | rpl::type_erased)
+		: rpl::producer<bool>(nullptr);
+
+	builder.scope([&] {
+		builder.addDivider();
+		builder.addSkip();
+		builder.addSubsectionTitle({
+			.id = u"advanced/window_close"_q,
+			.title = tr::lng_settings_window_close(),
+			.keywords = { u"close"_q, u"window"_q, u"background"_q, u"quit"_q, u"taskbar"_q, u"minimize"_q },
+		});
+
+		builder.add([settings](const WidgetContext &ctx) {
+			const auto container = ctx.container.get();
+			auto wrap = object_ptr<Ui::VerticalLayout>(container);
+			const auto inner = wrap.data();
+
+			const auto group = std::make_shared<Ui::RadioenumGroup<Behavior>>(
+				settings->closeBehavior());
+			const auto addRadio = [&](Behavior value, const QString &label) {
+				inner->add(
+					object_ptr<Ui::Radioenum<Behavior>>(
+						inner,
+						group,
+						value,
+						label,
+						st::settingsSendType),
+					st::settingsSendTypePadding);
+			};
+
+			addRadio(
+				Behavior::RunInBackground,
+				tr::lng_settings_run_in_background(tr::now));
+			addRadio(
+				Behavior::CloseToTaskbar,
+				tr::lng_settings_close_to_taskbar(tr::now));
+			addRadio(
+				Behavior::Quit,
+				tr::lng_settings_quit_on_close(tr::now));
+
+			group->value() | rpl::filter([=](Behavior value) {
+				return (value != settings->closeBehavior());
+			}) | rpl::on_next([=](Behavior value) {
+				settings->setCloseBehavior(value);
+				Local::writeSettings();
+			}, inner->lifetime());
+
+			return SectionBuilder::WidgetToAdd{ .widget = std::move(wrap) };
+		});
+
+		builder.addSkip();
+	}, std::move(shown));
+}
+#endif // !Q_OS_WIN && !Q_OS_MAC
+
 void BuildSystemIntegrationSection(SectionBuilder &builder) {
 	const auto controller = builder.controller();
 	const auto settings = &Core::App().settings();
@@ -469,6 +535,22 @@ void BuildSystemIntegrationSection(SectionBuilder &builder) {
 			settings->setMacWarnBeforeQuit(checked);
 			Core::App().saveSettingsDelayed();
 		}, warnBeforeQuit->lifetime());
+	}
+
+	const auto systemReplace = builder.addCheckbox({
+		.id = u"advanced/system_text_replace"_q,
+		.title = tr::lng_settings_system_text_replace(),
+		.checked = settings->systemTextReplace(),
+		.keywords = { u"text"_q, u"replace"_q, u"system"_q },
+	});
+	if (systemReplace) {
+		systemReplace->checkedChanges(
+		) | rpl::filter([=](bool checked) {
+			return (checked != settings->systemTextReplace());
+		}) | rpl::on_next([=](bool checked) {
+			settings->setSystemTextReplace(checked);
+			Core::App().saveSettingsDelayed();
+		}, systemReplace->lifetime());
 	}
 
 #ifndef OS_MAC_STORE
@@ -798,7 +880,6 @@ void BuildSpellcheckerSection(SectionBuilder &builder) {
 	const auto session = builder.session();
 	const auto settings = &Core::App().settings();
 	const auto isSystem = Platform::Spellchecker::IsSystemSpellchecker();
-	const auto container = builder.container();
 
 	builder.addDivider();
 	builder.addSkip();
@@ -1100,6 +1181,45 @@ void BuildExportSection(SectionBuilder &builder) {
 	});
 }
 
+void BuildScreenReaderSection(SectionBuilder &builder) {
+	const auto detected = base::ScreenReaderState::Instance()->active();
+	const auto disabled = Ui::ScreenReaderModeDisabled();
+	if (!detected || !disabled) {
+		return;
+	}
+
+	builder.addDivider();
+	builder.addSkip();
+	builder.addSubsectionTitle({
+		.id = u"advanced/screen_reader"_q,
+		.title = tr::lng_screen_reader_settings_title(),
+		.keywords = { u"screen reader"_q, u"accessibility"_q, u"voiceover"_q },
+	});
+
+	const auto toggle = builder.addButton({
+		.id = u"advanced/screen_reader_disable"_q,
+		.title = tr::lng_screen_reader_settings_disable(),
+		.st = &st::settingsButtonNoIcon,
+		.toggled = rpl::single(disabled),
+		.keywords = { u"screen reader"_q, u"accessibility"_q },
+	});
+
+	if (toggle) {
+		toggle->toggledValue(
+		) | rpl::filter([=](bool value) {
+			return (value != Ui::ScreenReaderModeDisabled());
+		}) | rpl::on_next([=](bool value) {
+			Core::App().settings().writePref<bool>(
+				Core::kScreenReaderModeDisabledKey,
+				value);
+			Core::App().saveSettingsDelayed();
+			Ui::SetScreenReaderModeDisabled(value);
+		}, toggle->lifetime());
+	}
+
+	builder.addSkip();
+}
+
 class Advanced : public Section<Advanced> {
 public:
 	Advanced(
@@ -1127,9 +1247,13 @@ const auto kMeta = BuildHelper({
 	BuildDataStorageSection(builder);
 	BuildAutoDownloadSection(builder);
 	BuildWindowTitleSection(builder);
+#if !defined Q_OS_WIN && !defined Q_OS_MAC
+	BuildWindowCloseBehaviorSection(builder);
+#endif
 	BuildSystemIntegrationSection(builder);
 	BuildPerformanceSection(builder);
 	BuildSpellcheckerSection(builder);
+	BuildScreenReaderSection(builder);
 	if (autoUpdate) {
 		BuildUpdateSection(builder, false);
 	}

@@ -99,6 +99,7 @@ struct VoiceData : public DocumentAdditionalData {
 struct VideoData : public DocumentAdditionalData {
 	QString codec;
 	std::vector<not_null<DocumentData*>> qualities;
+	QSize realVideoSize;
 };
 
 using RoundData = VoiceData;
@@ -291,7 +292,7 @@ public:
 	[[nodiscard]] Storage::Cache::Key cacheKey() const;
 	[[nodiscard]] uint8 cacheTag() const;
 
-	[[nodiscard]] bool canBeStreamed(HistoryItem *item) const;
+	[[nodiscard]] bool canBeStreamed() const;
 	[[nodiscard]] auto createStreamingLoader(
 		Data::FileOrigin origin,
 		bool forceRemoteLoader) const

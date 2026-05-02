@@ -654,28 +654,31 @@ bool MainWidget::sendPaths(
 
 bool MainWidget::filesOrForwardDrop(
 		not_null<Data::Thread*> thread,
-		not_null<const QMimeData*> data) {
-	if (const auto forum = thread->asForum()) {
-		Window::ShowDropMediaBox(
-			_controller,
-			Core::ShareMimeMediaData(data),
-			forum);
-		if (_hider) {
-			_hider->startHide();
-			clearHider(_hider);
+		not_null<const QMimeData*> data,
+		bool forumResolved) {
+	if (!forumResolved) {
+		if (const auto forum = thread->asForum()) {
+			Window::ShowDropMediaBox(
+				_controller,
+				Core::ShareMimeMediaData(data),
+				forum);
+			if (_hider) {
+				_hider->startHide();
+				clearHider(_hider);
+			}
+			return true;
+		} else if (const auto history = thread->asHistory()
+			; history && history->peer->monoforum()) {
+			Window::ShowDropMediaBox(
+				_controller,
+				Core::ShareMimeMediaData(data),
+				history->peer->monoforum());
+			if (_hider) {
+				_hider->startHide();
+				clearHider(_hider);
+			}
+			return true;
 		}
-		return true;
-	} else if (const auto history = thread->asHistory()
-		; history && history->peer->monoforum()) {
-		Window::ShowDropMediaBox(
-			_controller,
-			Core::ShareMimeMediaData(data),
-			history->peer->monoforum());
-		if (_hider) {
-			_hider->startHide();
-			clearHider(_hider);
-		}
-		return true;
 	}
 	if (data->hasFormat(u"application/x-td-forward"_q)) {
 		auto draft = Data::ForwardDraft{
@@ -1127,7 +1130,15 @@ void MainWidget::exportTopBarHeightUpdated() {
 }
 
 SendMenu::Details MainWidget::sendMenuDetails() const {
-	return _history->sendMenuDetails();
+	return _mainSection
+		? _mainSection->sendMenuDetails()
+		: _history->sendMenuDetails();
+}
+
+bool MainWidget::processChosenSticker(ChatHelpers::FileChosen &&chosen) {
+	return _mainSection
+		? _mainSection->processChosenSticker(std::move(chosen))
+		: _history->processChosenSticker(std::move(chosen));
 }
 
 void MainWidget::dialogsCancelled() {
@@ -1558,6 +1569,17 @@ void MainWidget::showHistory(
 	floatPlayerCheckVisibility();
 
 	controller()->dropSubsectionTabs();
+}
+
+bool MainWidget::handleDrawToReplyRequest(Data::DrawToReplyRequest request) {
+	if (_mainSection) {
+		using namespace HistoryView;
+		if (const auto с = dynamic_cast<ChatWidget*>(_mainSection.data())) {
+			return с->handleDrawToReplyRequest(std::move(request));
+		}
+		return false;
+	}
+	return _history->handleDrawToReplyRequest(std::move(request));
 }
 
 void MainWidget::showMessage(
@@ -2828,7 +2850,9 @@ void MainWidget::handleHistoryBack() {
 		? rootPeer->owner().historyLoaded(rootPeer)
 		: nullptr;
 	const auto rootFolder = rootHistory ? rootHistory->folder() : nullptr;
-	if (openedForum && (!rootPeer || rootPeer->forum() != openedForum)) {
+	if (openedForum
+		&& _stack.empty()
+		&& (!rootPeer || rootPeer->forum() != openedForum)) {
 		_controller->closeForum();
 	} else if (!openedFolder
 		|| (rootFolder == openedFolder)
