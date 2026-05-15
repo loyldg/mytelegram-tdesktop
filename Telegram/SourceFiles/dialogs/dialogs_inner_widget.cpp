@@ -34,6 +34,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/vertical_list.h"
 #include "ui/painter.h"
 #include "ui/rect.h"
+#include "ui/screen_reader_mode.h"
 #include "ui/ui_utility.h"
 #include "data/components/sponsored_messages.h"
 #include "data/data_drafts.h"
@@ -53,6 +54,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_saved_messages.h"
 #include "data/data_saved_sublist.h"
 #include "data/data_stories.h"
+#include "data/stickers/data_custom_emoji.h"
 #include "data/stickers/data_stickers.h"
 #include "data/data_send_action.h"
 #include "base/unixtime.h"
@@ -91,6 +93,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include <QtWidgets/QApplication>
 #include <QtCore/QMimeData>
+#include <unordered_map>
 
 namespace Dialogs {
 namespace {
@@ -295,6 +298,7 @@ InnerWidget::InnerWidget(
 , _childListShown(std::move(childListShown))
 , _freezeTimer([=] { _shownList->unfreeze(); update(); }) {
 	setAttribute(Qt::WA_OpaquePaintEvent, true);
+	setAccessibleName(tr::lng_recent_chats(tr::now));
 
 	style::PaletteChanged(
 	) | rpl::on_next([=] {
@@ -868,7 +872,7 @@ void InnerWidget::paintEvent(QPaintEvent *e) {
 		const auto &key = row->key();
 		const auto active = mayBeActive && isRowActive(row, activeEntry);
 		const auto history = key.history();
-		const auto forum = history && history->isForum();
+		const auto forum = history && history->peer->displayAsForum();
 		const auto monoforum = history && history->amMonoforumAdmin();
 		if ((forum || monoforum) && !_topicJumpCache) {
 			_topicJumpCache = std::make_unique<Ui::TopicJumpCache>();
@@ -1559,7 +1563,8 @@ void InnerWidget::paintPeerSearchResult(
 		if (!result->badge.ready(info)) {
 			result->badge.set(
 				info,
-				peer->owner().customEmojiManager().factory(),
+				peer->owner().customEmojiManager().factory(
+					Data::CustomEmojiSizeTag::Isolated),
 				[=] { updateSearchResult(peer); });
 		}
 		const auto &st = Ui::VerifiedStyle(context);
@@ -5716,6 +5721,170 @@ void InnerWidget::deactivateQuickAction() {
 		_inactiveQuickActions.push_back(
 			QuickActionPtr{ _activeQuickAction.release() });
 	}
+}
+
+void InnerWidget::focusInEvent(QFocusEvent *e) {
+	RpWidget::focusInEvent(e);
+	if (_state != WidgetState::Default) {
+		return;
+	}
+	if (!_selected && !_shownList->empty()) {
+		_selected = _shownList->cbegin()->get();
+	}
+	if (_selected) {
+		const auto row = _selected;
+		InvokeQueued(this, [=] {
+			if (_selected == row && hasFocus()) {
+				announceSelectedFocus();
+			}
+		});
+	}
+}
+
+bool InnerWidget::processKeyDispatch(QKeyEvent *e) {
+	const auto previous = _selected;
+	if (e->key() == Qt::Key_Up) {
+		selectSkip(-1);
+	} else if (e->key() == Qt::Key_Down) {
+		selectSkip(1);
+	} else if (e->key() == Qt::Key_PageUp) {
+		selectSkipPage(_visibleBottom - _visibleTop, -1);
+	} else if (e->key() == Qt::Key_PageDown) {
+		selectSkipPage(_visibleBottom - _visibleTop, 1);
+	} else {
+		return false;
+	}
+	if (_selected != previous) {
+		announceSelectedFocus();
+	}
+	return true;
+}
+
+void InnerWidget::keyPressEvent(QKeyEvent *e) {
+	if (processKeyDispatch(e)) {
+		return;
+	} else if (e->key() == Qt::Key_Return || e->key() == Qt::Key_Enter) {
+		chooseRow();
+		return;
+	}
+	RpWidget::keyPressEvent(e);
+}
+
+void InnerWidget::announceSelectedFocus() {
+	if (!_selected || _state != WidgetState::Default) {
+		return;
+	}
+	auto index = 0;
+	for (auto i = _shownList->cbegin(); i != _shownList->cend(); ++i, ++index) {
+		if (i->get() == _selected) {
+			accessibilityChildNameChanged(index);
+			accessibilityChildFocused(index);
+			return;
+		}
+	}
+}
+
+Ui::AccessibilityState InnerWidget::accessibilityState() const {
+	return {};
+}
+
+int InnerWidget::accessibilityChildCount() const {
+	return _shownList->size();
+}
+
+QString InnerWidget::accessibilityChildName(int index) const {
+	if (index < 0 || index >= _shownList->size()) {
+		return {};
+	}
+	auto it = _shownList->cbegin();
+	std::advance(it, index);
+	return RowAccessibilityName(it->get(), _filterId);
+}
+
+QAccessible::State InnerWidget::accessibilityChildState(int index) const {
+	auto state = QAccessible::State();
+	state.selectable = true;
+	if (Ui::ScreenReaderModeActive()) {
+		state.focusable = true;
+	}
+	if (index < 0 || index >= _shownList->size()) {
+		return state;
+	}
+	auto it = _shownList->cbegin();
+	std::advance(it, index);
+	if (it->get() == _selected) {
+		state.selected = true;
+		state.active = true;
+		if (Ui::ScreenReaderModeActive()) {
+			state.focused = true;
+		}
+	}
+	return state;
+}
+
+QAccessible::Role InnerWidget::accessibilityChildRole() const {
+	return QAccessible::Role::ListItem;
+}
+
+QRect InnerWidget::accessibilityChildRect(int index) const {
+	if (index < 0 || index >= _shownList->size()) {
+		return QRect();
+	}
+	auto it = _shownList->cbegin();
+	std::advance(it, index);
+	const auto row = it->get();
+	return QRect(0, row->top(), width(), row->height());
+}
+
+int InnerWidget::accessibilityChildColumnCount(int row) const {
+	if (row < 0 || row >= _shownList->size()) {
+		return 0;
+	}
+	return int(activeSubItems(row).size());
+}
+
+const std::vector<SubItem> &InnerWidget::activeSubItems(int row) const {
+	Expects(row >= 0 && row < _shownList->size());
+
+	if (_activeSubItemsRow != row) {
+		auto it = _shownList->cbegin();
+		std::advance(it, row);
+		_activeSubItems = ActiveSubItems(it->get(), _filterId);
+		_activeSubItemsRow = row;
+	}
+	return _activeSubItems;
+}
+
+QAccessible::Role InnerWidget::accessibilityChildSubItemRole() const {
+	return QAccessible::Cell;
+}
+
+QString InnerWidget::accessibilityChildSubItemName(
+		int row,
+		int column) const {
+	if (row < 0 || row >= _shownList->size()) {
+		return {};
+	}
+	const auto &active = activeSubItems(row);
+	if (column < 0 || column >= int(active.size())) {
+		return {};
+	}
+	return SubItemLabel(active[column]);
+}
+
+QString InnerWidget::accessibilityChildSubItemValue(
+		int row,
+		int column) const {
+	if (row < 0 || row >= _shownList->size()) {
+		return {};
+	}
+	const auto &active = activeSubItems(row);
+	if (column < 0 || column >= int(active.size())) {
+		return {};
+	}
+	auto it = _shownList->cbegin();
+	std::advance(it, row);
+	return SubItemValue(it->get(), _filterId, active[column]);
 }
 
 } // namespace Dialogs
