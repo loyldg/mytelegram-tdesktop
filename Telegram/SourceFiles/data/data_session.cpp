@@ -433,6 +433,16 @@ void Session::clear() {
 	_shortcutMessages = nullptr;
 	_session->scheduledMessages().clear();
 	_session->sponsoredMessages().clear();
+
+	// Items are gone now, so HistoryMessageReply::resolvedStory raw
+	// pointers no longer linger. Tear stories down here so their
+	// shared_ptr<GroupCall> drops while Main::Session::_data still
+	// holds a live pointer to us; otherwise the GroupCall destructor
+	// would run inside ~Data::Session and find data() returning a
+	// null reference (the parent unique_ptr resets its stored pointer
+	// before invoking the deleter).
+	_stories->clear();
+
 	_dependentMessages.clear();
 	base::take(_messages);
 	base::take(_nonChannelMessages);
@@ -1817,16 +1827,19 @@ void Session::documentLoadFail(
 
 void Session::photoLoadProgress(not_null<PhotoData*> photo) {
 	requestPhotoViewRepaint(photo);
+	_photoLoadProgress.fire_copy(photo);
 }
 
 void Session::photoLoadDone(not_null<PhotoData*> photo) {
 	notifyPhotoLayoutChanged(photo);
+	_photoLoadProgress.fire_copy(photo);
 }
 
 void Session::photoLoadFail(
 		not_null<PhotoData*> photo,
 		bool started) {
 	notifyPhotoLayoutChanged(photo);
+	_photoLoadProgress.fire_copy(photo);
 }
 
 void Session::markMediaRead(not_null<const DocumentData*> document) {
@@ -2180,6 +2193,26 @@ rpl::producer<not_null<const HistoryItem*>> Session::itemRemoved(
 	) | rpl::filter([=](not_null<const HistoryItem*> item) {
 		return (itemId == item->fullId());
 	});
+}
+
+void Session::notifyItemsAboutToBeDestroyed(
+		const std::vector<not_null<HistoryItem*>> &items) {
+	_itemsAboutToBeDestroyed.fire_copy(items);
+}
+
+auto Session::itemsAboutToBeDestroyed() const
+-> rpl::producer<std::vector<not_null<HistoryItem*>>> {
+	return _itemsAboutToBeDestroyed.events();
+}
+
+void Session::notifyViewAboutToBeRemoved(
+		not_null<const ViewElement*> view) {
+	_viewAboutToBeRemoved.fire_copy(view);
+}
+
+rpl::producer<not_null<const ViewElement*>>
+Session::viewAboutToBeRemoved() const {
+	return _viewAboutToBeRemoved.events();
 }
 
 void Session::notifyViewRemoved(not_null<const ViewElement*> view) {
@@ -2859,8 +2892,18 @@ void Session::unregisterMessageTTL(
 void Session::checkTTLs() {
 	_ttlCheckTimer.cancel();
 	const auto now = base::unixtime::now();
-	while (!_ttlMessages.empty() && _ttlMessages.begin()->first <= now) {
-		_ttlMessages.begin()->second.front()->destroy();
+	auto expired = std::vector<not_null<HistoryItem*>>();
+	for (const auto &[when, items] : _ttlMessages) {
+		if (when > now) {
+			break;
+		}
+		expired.insert(expired.end(), items.begin(), items.end());
+	}
+	if (!expired.empty()) {
+		notifyItemsAboutToBeDestroyed(expired);
+		for (const auto &item : expired) {
+			item->destroy();
+		}
 	}
 	scheduleNextTTLs();
 }
@@ -2917,17 +2960,24 @@ void Session::processMessagesDeleted(
 		return;
 	}
 
+	auto toDestroy = std::vector<not_null<HistoryItem*>>();
 	auto historiesToCheck = base::flat_set<not_null<History*>>();
 	for (const auto &messageId : data) {
 		const auto i = list ? list->find(messageId.v) : Messages::iterator();
 		if (list && i != list->end()) {
 			const auto history = i->second->history();
-			i->second->destroy();
+			toDestroy.push_back(i->second);
 			if (!history->chatListMessageKnown()) {
 				historiesToCheck.emplace(history);
 			}
 		} else if (affected) {
 			affected->unknownMessageDeleted(messageId.v);
+		}
+	}
+	if (!toDestroy.empty()) {
+		notifyItemsAboutToBeDestroyed(toDestroy);
+		for (const auto &item : toDestroy) {
+			item->destroy();
 		}
 	}
 	for (const auto &history : historiesToCheck) {
@@ -2936,14 +2986,21 @@ void Session::processMessagesDeleted(
 }
 
 void Session::processNonChannelMessagesDeleted(const QVector<MTPint> &data) {
+	auto toDestroy = std::vector<not_null<HistoryItem*>>();
 	auto historiesToCheck = base::flat_set<not_null<History*>>();
 	for (const auto &messageId : data) {
 		if (const auto item = nonChannelMessage(messageId.v)) {
 			const auto history = item->history();
-			item->destroy();
+			toDestroy.push_back(item);
 			if (!history->chatListMessageKnown()) {
 				historiesToCheck.emplace(history);
 			}
+		}
+	}
+	if (!toDestroy.empty()) {
+		notifyItemsAboutToBeDestroyed(toDestroy);
+		for (const auto &item : toDestroy) {
+			item->destroy();
 		}
 	}
 	for (const auto &history : historiesToCheck) {
@@ -3151,14 +3208,13 @@ HistoryItem *Session::addNewMessage(
 		return nullptr;
 	}
 
-	if (data.type() == mtpc_message) {
+	if (type == NewMessageType::Unread
+		&& data.type() == mtpc_message) {
 		if (const auto h = historyLoaded(peerId)) {
 			if (const auto streamed = h->streamedDraftsIfExists()) {
 				if (const auto adopted = streamed->adoptIncoming(
 						data.c_message())) {
-					if (type == NewMessageType::Unread) {
-						CheckForSwitchInlineButton(adopted);
-					}
+					CheckForSwitchInlineButton(adopted);
 					return adopted;
 				}
 			}

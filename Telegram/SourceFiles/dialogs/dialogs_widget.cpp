@@ -724,6 +724,9 @@ Widget::Widget(
 
 	setupFrozenAccountBar();
 	setupTopBarSuggestions();
+#ifdef _DEBUG
+	setupTopBarSuggestionTestHotkeys();
+#endif // _DEBUG
 }
 
 void Widget::setupSwipeBack() {
@@ -771,14 +774,14 @@ void Widget::setupSwipeBack() {
 		}
 	};
 
-	auto init = [=](int top, Qt::LayoutDirection direction) {
-		top -= _inner->y();
+	auto init = [=](Ui::Controls::SwipeHandlerInitData data) {
+		const auto top = data.cursorPosition.y() - _inner->y();
 		_swipeBackIconMirrored = false;
 		_swipeBackMirrored = false;
 		if (_childListShown.current()) {
 			return Ui::Controls::SwipeHandlerFinishData();
 		}
-		const auto isRightToLeft = direction == Qt::RightToLeft;
+		const auto isRightToLeft = data.direction == Qt::RightToLeft;
 		const auto action = Core::App().settings().quickDialogAction();
 		const auto isDisabled = action == Ui::QuickDialogAction::Disabled;
 		if (_inner) {
@@ -1119,35 +1122,52 @@ void Widget::setupTopBarSuggestions() {
 					&& !searchInPeer
 					&& (id == owner->chatsFilters().defaultId());
 			});
-			return TopBarSuggestionValue(_innerList, &session(), std::move(on));
+			return TopBarSuggestionValue(
+				this,
+				&session(),
+				std::move(on),
+				_childListShown.value(),
+				_prepareTopBarSnapshot.events());
 		}) | rpl::flatten_latest() | rpl::on_next([=](
 				Ui::SlideWrap<Ui::RpWidget> *raw) {
 			if (raw) {
-				_topBarSuggestion = _innerList->insert(
+				_topBarSuggestionPlaceholder.reset(_innerList->insert(
 					0,
-					object_ptr<Ui::SlideWrap<Ui::RpWidget>>::fromRaw(raw));
+					object_ptr<Ui::RpWidget>(_innerList)));
+				_topBarSuggestionPlaceholder->paintOn([
+					ph = _topBarSuggestionPlaceholder.get()
+				](QPainter &p) {
+					p.fillRect(ph->rect(), st::dialogsBg);
+				});
+				_topBarSuggestion.reset(raw);
+				_topBarSuggestion->setParent(_scroll);
+				_topBarSuggestion->raise();
 				_topBarSuggestion->heightValue(
-				) | rpl::start_to_stream(
-					_topBarSuggestionHeightChanged,
+				) | rpl::on_next([=](int h) {
+					if (_topBarSuggestionPlaceholder) {
+						_topBarSuggestionPlaceholder->resize(
+							_topBarSuggestionPlaceholder->width(),
+							h);
+					}
+					_scroll->setBarTopInset(h);
+					_topBarSuggestionHeightChanged.fire_copy(h);
+				}, _topBarSuggestion->entity()->lifetime());
+				const auto pinToScroll = [=] {
+					if (_topBarSuggestion) {
+						_topBarSuggestion->resizeToWidth(_scroll->width());
+						_topBarSuggestion->moveToLeft(0, 0);
+					}
+				};
+				_scroll->sizeValue(
+				) | rpl::to_empty | rpl::on_next(
+					pinToScroll,
 					_topBarSuggestion->entity()->lifetime());
-				rpl::combine(
-					_topBarSuggestion->entity()->desiredHeightValue(),
-					_childListShown.value()
-				) | rpl::on_next([=](
-						int desiredHeight,
-						float64 shown) {
-					const auto newHeight = desiredHeight * (1. - shown);
-					_topBarSuggestion->entity()->setMaximumHeight(newHeight);
-					_topBarSuggestion->entity()->setMinimumWidth((shown > 0)
-						? width()
-						: 0);
-					_topBarSuggestion->entity()->resize(width(), newHeight);
-				}, _topBarSuggestion->lifetime());
+				pinToScroll();
 			} else {
-				if (_topBarSuggestion) {
-					delete _topBarSuggestion;
-				}
+				_topBarSuggestionPlaceholder = nullptr;
 				_topBarSuggestion = nullptr;
+				_scroll->setBarTopInset(0);
+				_topBarSuggestionHeightChanged.fire(0);
 			}
 		}, lifetime());
 	});
@@ -1793,6 +1813,7 @@ void Widget::updateSuggestions(anim::type animated) {
 			_scroll->show();
 		}
 	} else if (suggest && !_suggestions) {
+		_hidingSuggestions.clear();
 		if (animated == anim::type::normal) {
 			startWidthAnimation();
 		}
@@ -2782,8 +2803,8 @@ bool Widget::peerSearchRequired() const {
 bool Widget::searchForTopicsRequired(const QString &query) const {
 	return _searchState.filterChatsList()
 		&& _openedForum
-		&& !query.isEmpty()
 		&& (IsHashOrCashtagSearchQuery(query) == HashOrCashtag::None)
+		&& !TextUtilities::PrepareSearchWords(query).isEmpty()
 		&& !_openedForum->topicsList()->loaded();
 }
 
@@ -3476,6 +3497,7 @@ void Widget::openChildList(
 		}
 	}, shadow->lifetime());
 
+	_prepareTopBarSnapshot.fire({});
 	updateControlsGeometry();
 	updateControlsVisibility(true);
 
@@ -4286,6 +4308,10 @@ void Widget::paintEvent(QPaintEvent *e) {
 		const auto top = _searchControls->y()
 			+ _searchControls->height()
 			+ suggestionsSkip;
+		const auto aboveBottom = above.y() + above.height();
+		if (top > aboveBottom) {
+			p.fillRect(0, aboveBottom, width(), top - aboveBottom, bg);
+		}
 		p.drawPixmapLeft(0, top, width(), _widthAnimationCache);
 		belowTop = top
 			+ (_widthAnimationCache.height() / style::DevicePixelRatio());

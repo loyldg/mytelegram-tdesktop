@@ -145,6 +145,8 @@ envForThirdPartyKey = hashlib.sha1(envForThirdPartyKeyString.encode('utf-8')).he
 modifiedEnv = os.environ.copy()
 for key in environment:
     modifiedEnv[key] = environment[key]
+if win and 'NoDefaultCurrentDirectoryInExePath' in modifiedEnv:
+    del modifiedEnv['NoDefaultCurrentDirectoryInExePath']
 
 modifiedEnv['PATH'] = environment['PATH_PREFIX'] + modifiedEnv['PATH']
 
@@ -311,8 +313,9 @@ def run(commands):
         if os.path.exists("command.bat"):
             os.remove("command.bat")
         with open("command.bat", 'w') as file:
-            file.write('@echo OFF\r\n' + winFailOnEach(commands))
-        result = subprocess.run("command.bat", shell=True, env=modifiedEnv).returncode == 0
+            file.write('@echo OFF\r\nset "NoDefaultCurrentDirectoryInExePath="\r\n' + winFailOnEach(commands))
+        batPath = os.path.abspath("command.bat")
+        result = subprocess.run(batPath, shell=True, env=modifiedEnv).returncode == 0
         if result and os.path.exists("command.bat"):
             os.remove("command.bat")
         return result
@@ -452,7 +455,9 @@ if customRunCommand:
 stage('patches', """
     git clone https://github.com/desktop-app/patches.git
     cd patches
-    git checkout 3128a5b5879c450f686f240cc9602ad7f4a054b4
+    git checkout 446f47239df3102a9a24304b5e3a8c9bee5784f7
+mac:
+    git clone https://github.com/desktop-app/qt6_highsierra_patches.git qt6_highsierra
 """)
 
 stage('msys64', """
@@ -514,9 +519,13 @@ stage('lzma', """
 win:
     git clone https://github.com/desktop-app/lzma.git
     cd lzma\\C\\Util\\LzmaLib
-    msbuild -m LzmaLib.sln /property:Configuration=Debug /property:Platform="$X8664"
+    SET "ToolsetProp="
+winarm:
+    SET "ToolsetProp=/property:PlatformToolset=v145"
+win:
+    msbuild -m LzmaLib.sln /property:Configuration=Debug /property:Platform="$X8664" %ToolsetProp%
 release:
-    msbuild -m LzmaLib.sln /property:Configuration=Release /property:Platform="$X8664"
+    msbuild -m LzmaLib.sln /property:Configuration=Release /property:Platform="$X8664" %ToolsetProp%
 """)
 
 stage('xz', """
@@ -1111,10 +1120,8 @@ depends:python/Scripts/activate.bat
     %THIRDPARTY_DIR%\\python\\Scripts\\activate.bat
     meson setup --default-library=static --buildtype=debug -Db_vscrt=mtd out/Debug
     meson compile -C out/Debug
-release:
     meson setup --default-library=static --buildtype=release -Db_vscrt=mt out/Release
     meson compile -C out/Release
-win:
     deactivate
 mac:
     buildOneArch() {
@@ -1384,10 +1391,12 @@ depends:patches/breakpad.diff
 win:
     SET "PYTHONUTF8=1"
     SET "FolderPostfix="
+    SET "ToolsetProp="
 win64:
     SET "FolderPostfix=_x64"
 winarm:
     SET "FolderPostfix=_ARM64"
+    SET "ToolsetProp=/property:PlatformToolset=v145"
 win:
 depends:python/Scripts/activate.bat
     %THIRDPARTY_DIR%\\python\\Scripts\\activate.bat
@@ -1399,7 +1408,7 @@ release:
     ninja -C out/Release%FolderPostfix% common crash_generation_client exception_handler
     cd tools\\windows\\dump_syms
     gyp dump_syms.gyp --format=msvs
-    msbuild -m dump_syms.vcxproj /property:Configuration=Release /property:Platform="x64"
+    msbuild -m dump_syms.vcxproj /property:Configuration=Release /property:Platform="x64" %ToolsetProp%
 win:
     deactivate
 mac:
@@ -1553,41 +1562,19 @@ win:
 
     jom -j%NUMBER_OF_PROCESSORS%
     jom -j%NUMBER_OF_PROCESSORS% install
-mac:
-    find ../../patches/qtbase_$QT -type f -print0 | sort -z | xargs -0 git -C qtbase apply
-
-    CONFIGURATIONS=-debug
-release:
-    CONFIGURATIONS=-debug-and-release
-mac:
-    ./configure -prefix "$USED_PREFIX/Qt-$QT" \
-        $CONFIGURATIONS \
-        -force-debug-info \
-        -opensource \
-        -confirm-license \
-        -static \
-        -opengl desktop \
-        -no-openssl \
-        -securetransport \
-        -I "$USED_PREFIX/include" \
-        LIBJPEG_LIBS="$USED_PREFIX/lib/libjpeg.a" \
-        ZLIB_LIBS="$USED_PREFIX/lib/libz.a" \
-        -nomake examples \
-        -nomake tests \
-        -platform macx-clang
-
-    make $MAKE_THREADS_CNT
-    make install
 """)
 else: # qt > '6'
     branch = 'v$QT' + ('-lts-lgpl' if qt.startswith('6.2.') else '')
     stage('qt_' + qt, """
     git clone -b """ + branch + """ https://github.com/qt/qt5.git qt_$QT
     cd qt_$QT
-    git submodule update --init --recursive --progress qtbase qtimageformats qtsvg
+    git submodule update --init --recursive --progress qtbase qtimageformats qtshadertools qtsvg
 depends:patches/qtbase_""" + qt + """/*.patch
 mac:
     find $PWD/../patches/qtbase_$QT -type f -print0 | sort -z | xargs -0 git -C qtbase apply -v
+    if [ -d "../patches/qt6_highsierra" ]; then
+        find "$PWD/../patches/qt6_highsierra" -maxdepth 1 -name "*.patch" -print0 | sort -z | xargs -0 git -C qtbase apply -v
+    fi
     sed -i.bak 's/tqtc-//' {qtimageformats,qtsvg}/dependencies.yaml
 
     CONFIGURATIONS=-debug
@@ -1600,6 +1587,7 @@ mac:
         -opensource \
         -confirm-license \
         -static \
+        -no-framework \
         -opengl desktop \
         -no-openssl \
         -securetransport \
@@ -1607,9 +1595,12 @@ mac:
         -I "$USED_PREFIX/include" \
         -no-feature-futimens \
         -no-feature-brotli \
+        -no-feature-cxx17_filesystem \
         -platform macx-clang -- \
         -DCMAKE_OSX_ARCHITECTURES="x86_64;arm64" \
-        -DCMAKE_PREFIX_PATH="$USED_PREFIX"
+        -DCMAKE_PREFIX_PATH="$USED_PREFIX" \
+        -DQT_NO_HANDLE_APPLE_SINGLE_ARCH_CROSS_COMPILING=ON \
+        -DQT_SYNC_HEADERS_AT_CONFIGURE_TIME=ON
 
     cmake --build .
     cmake --install .

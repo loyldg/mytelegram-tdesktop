@@ -395,6 +395,8 @@ void Document::createComponents() {
 		if (_data->hasThumbnail() && !_data->isSong()) {
 			_data->loadThumbnail(_realParent->fullId());
 			mask |= HistoryDocumentThumbed::Bit();
+		} else if (_data->isSvgImage()) {
+			mask |= HistoryDocumentThumbed::Bit();
 		}
 	}
 	UpdateComponents(mask);
@@ -508,11 +510,15 @@ QSize Document::countOptimalSize() {
 	auto thumbed = Get<HistoryDocumentThumbed>();
 	const auto &st = thumbed ? st::msgFileThumbLayout : st::msgFileLayout;
 	if (thumbed) {
-		const auto &location = _data->thumbnailLocation();
-		auto tw = style::ConvertScale(location.width());
-		auto th = style::ConvertScale(location.height());
-		if (tw > th) {
-			thumbed->thumbw = (tw * st.thumbSize) / th;
+		if (_data->hasThumbnail()) {
+			const auto &location = _data->thumbnailLocation();
+			auto tw = style::ConvertScale(location.width());
+			auto th = style::ConvertScale(location.height());
+			if (tw > th) {
+				thumbed->thumbw = (tw * st.thumbSize) / th;
+			} else {
+				thumbed->thumbw = st.thumbSize;
+			}
 		} else {
 			thumbed->thumbw = st.thumbSize;
 		}
@@ -1017,9 +1023,16 @@ void Document::validateThumbnail(
 		not_null<const HistoryDocumentThumbed*> thumbed,
 		int size,
 		Ui::BubbleRounding rounding) const {
-	const auto normal = _dataMedia->thumbnail();
+	const auto good = _data->isSvgImage()
+		? _dataMedia->goodThumbnail()
+		: nullptr;
+	const auto normal = good ? good : _dataMedia->thumbnail();
 	const auto blurred = _dataMedia->thumbnailInline();
 	if (!normal && !blurred) {
+		if (_data->isSvgImage()) {
+			_dataMedia->goodThumbnailWanted();
+			Data::DocumentMedia::CheckGoodThumbnail(_data);
+		}
 		return;
 	}
 	const auto outer = QSize(size, size);
@@ -1075,6 +1088,10 @@ void Document::ensureDataMediaCreated() const {
 		|| _data->isSongWithCover()
 		|| _transcribedRound) {
 		_dataMedia->thumbnailWanted(_realParent->fullId());
+	}
+	if (_data->isSvgImage()) {
+		_dataMedia->goodThumbnailWanted();
+		Data::DocumentMedia::CheckGoodThumbnail(_data);
 	}
 	history()->owner().registerHeavyViewPart(_parent);
 }
@@ -1677,7 +1694,16 @@ void Document::drawGrouped(
 		not_null<QPixmap*> cache) const {
 	const auto maybeMediaHighlight = context.highlightPathCache
 		&& context.highlightPathCache->isEmpty();
-	p.translate(geometry.topLeft());
+	const auto origin = geometry.topLeft();
+#if defined(Q_OS_WIN) && defined(_M_ARM64)
+	// Workaround MSVC ARM64 /O2 codegen bug: QPointF(QPoint(0, -3))
+	// produces yp == ~4.29e9 instead of -3.0 here. Touching the ints
+	// through a volatile load first forces correct sign-extension on
+	// the path that feeds QPointF's int->double conversion.
+	[[maybe_unused]] volatile auto touch = 0 + origin.x() + origin.y();
+#endif // defined(Q_OS_WIN) && defined(_M_ARM64)
+	const auto forigin = QPointF(origin);
+	p.translate(forigin);
 	draw(
 		p,
 		context.translated(-geometry.topLeft()),
