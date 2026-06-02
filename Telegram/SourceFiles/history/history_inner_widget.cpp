@@ -57,6 +57,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/inactive_press.h"
 #include "ui/painter.h"
 #include "ui/rect.h"
+#include "ui/screen_reader_mode.h"
 #include "ui/ui_utility.h"
 #include "window/window_session_controller.h"
 #include "window/window_controller.h"
@@ -2226,16 +2227,7 @@ std::unique_ptr<QMimeData> HistoryInner::prepareDrag() {
 				pressedHandler->property(
 					kPhotoLinkMediaProperty).toULongLong());
 			if (lnkPhoto) {
-				const auto itemDate = _mouseActionItem
-					? _mouseActionItem->date()
-					: TimeId(0);
-				photoData = HistoryView::PreparePhotoDragData(
-					lnkPhoto,
-					itemDate);
-				if (!photoData.tempPath.isEmpty()) {
-					urls.push_back(
-						QUrl::fromLocalFile(photoData.tempPath));
-				}
+				photoData = HistoryView::PreparePhotoDragData(lnkPhoto);
 			}
 		}
 
@@ -2245,8 +2237,7 @@ std::unique_ptr<QMimeData> HistoryInner::prepareDrag() {
 			return nullptr;
 		}
 
-		auto result = std::make_unique<HistoryView::DragMimeData>(
-			std::move(photoData.tempPath));
+		auto result = std::make_unique<QMimeData>();
 		if (!forwardIds.empty()) {
 			session().data().setMimeForwardIds(std::move(forwardIds));
 			result->setData(u"application/x-td-forward"_q, "1");
@@ -2254,9 +2245,9 @@ std::unique_ptr<QMimeData> HistoryInner::prepareDrag() {
 		if (!urls.isEmpty()) {
 			result->setUrls(urls);
 		}
-		if (!photoData.image.isNull()) {
-			result->setImageData(std::move(photoData.image));
-		}
+		HistoryView::FillDragMimeWithPhoto(
+			result.get(),
+			std::move(photoData));
 		return result;
 	}
 	return nullptr;
@@ -2722,6 +2713,22 @@ void HistoryInner::showContextMenu(QContextMenuEvent *e, bool showFromTouch) {
 		return;
 	}
 	const auto controller = _controller;
+	const auto canViewMessageStats = [&](HistoryItem *item) {
+		if (!item
+			|| item->isService()
+			|| !peerIsChannel(item->fullId().peer)
+			|| _peer->isMegagroup()) {
+			return false;
+		}
+		const auto channel = _peer->asChannel();
+		if (!channel) {
+			return false;
+		}
+		constexpr auto kMinViewsCount = 10;
+		return ((channel->flags() & ChannelDataFlag::CanGetStatistics)
+			|| (channel->canPostMessages()
+				&& item->viewsCount() >= kMinViewsCount));
+	};
 	const auto addItemActions = [&](
 			HistoryItem *item,
 			HistoryItem *albumPartItem) {
@@ -2806,24 +2813,16 @@ void HistoryInner::showContextMenu(QContextMenuEvent *e, bool showFromTouch) {
 				Window::ToggleMessagePinned(controller, pinItemId, !isPinned);
 			}), isPinned ? &st::menuIconUnpin : &st::menuIconPin);
 		}
-		if (!item->isService()
-			&& peerIsChannel(itemId.peer)
-			&& !_peer->isMegagroup()) {
-			constexpr auto kMinViewsCount = 10;
-			if (const auto channel = _peer->asChannel()) {
-				if ((channel->flags() & ChannelDataFlag::CanGetStatistics)
-					|| (channel->canPostMessages()
-						&& item->viewsCount() >= kMinViewsCount)) {
-					auto callback = crl::guard(controller, [=] {
-						controller->showSection(
-							Info::Statistics::Make(channel, itemId, {}));
-					});
-					_menu->addAction(
-						tr::lng_stats_title(tr::now),
-						std::move(callback),
-						&st::menuIconStats);
-				}
-			}
+		if (canViewMessageStats(item)) {
+			const auto channel = _peer->asChannel();
+			auto callback = crl::guard(controller, [=] {
+				controller->showSection(
+					Info::Statistics::Make(channel, itemId, {}));
+			});
+			_menu->addAction(
+				tr::lng_stats_title(tr::now),
+				std::move(callback),
+				&st::menuIconStats);
 		}
 	};
 	const auto addPhotoActions = [&](not_null<PhotoData*> photo, HistoryItem *item) {
@@ -3323,7 +3322,8 @@ void HistoryInner::showContextMenu(QContextMenuEvent *e, bool showFromTouch) {
 							item,
 							HistoryView::Context::History,
 							_controller,
-							!pollOptionLink.isEmpty());
+							!pollOptionLink.isEmpty(),
+							canViewMessageStats(item));
 					} else if (const auto contact = media->sharedContact()) {
 						const auto phone = contact->phoneNumber;
 						_menu->addAction(tr::lng_profile_copy_phone(tr::now), [=] {
@@ -3857,7 +3857,7 @@ void HistoryInner::keyPressEvent(QKeyEvent *e) {
 	}
 
 	const auto count = accessibilityChildCount();
-	if (count > 0) {
+	if (count > 0 && Ui::ScreenReaderModeActive()) {
 		if (_accessibilityFocusedItem
 			&& _accessibilityFocusedIndex >= 0) {
 			const auto elements = accessibleElements();
@@ -4453,8 +4453,10 @@ void HistoryInner::setupThanosEffect() {
 		lifetime());
 
 	session().data().viewAboutToBeRemoved(
-	) | rpl::on_next([=](not_null<const HistoryView::Element*> view) {
-		_thanosController->captureOnRemoval(view->data());
+	) | rpl::on_next([=](Data::ViewRemoval removal) {
+		if (removal.reason == Data::ViewRemovalReason::Removed) {
+			_thanosController->captureOnRemoval(removal.view->data());
+		}
 	}, lifetime());
 }
 
