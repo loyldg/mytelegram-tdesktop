@@ -189,6 +189,18 @@ void EditFileCaptionBox(
 		TextWithTags currentCaption,
 		Fn<bool(TextWithTags)> apply) {
 	box->setTitle(tr::lng_context_upload_edit_caption());
+	const auto window = Core::App().findWindow(box);
+	const auto controller = window ? window->sessionController() : nullptr;
+	const auto maxCaptionLength = [&] {
+		if (captionToPeer) {
+			return Data::PremiumLimits(
+				&captionToPeer->session()).captionLengthCurrent();
+		} else if (controller) {
+			return Data::PremiumLimits(
+				&controller->session()).captionLengthCurrent();
+		}
+		return kMaxMessageLength;
+	}();
 	const auto wrap = box->addRow(
 		object_ptr<Ui::RpWidget>(box),
 		st::boxRowPadding);
@@ -197,11 +209,10 @@ void EditFileCaptionBox(
 		st.files.caption,
 		Ui::InputField::Mode::MultiLine,
 		tr::lng_photo_caption());
-	field->setMaxLength(kMaxMessageLength);
+	field->setMaxLength(maxCaptionLength);
 	field->setSubmitSettings(Core::App().settings().sendSubmitWay());
 	Ui::ResizeFitChild(wrap, field);
-	if (const auto window = Core::App().findWindow(box)) {
-		const auto controller = window->sessionController();
+	if (window) {
 		const auto allow = [=](not_null<DocumentData*> emoji) {
 			return captionToPeer
 				&& Data::AllowEmojiWithoutPremium(captionToPeer, emoji);
@@ -750,10 +761,8 @@ Fn<SendMenu::Details()> SendFilesBox::prepareSendMenuDetails(
 			? SendMenu::SpoilerState::Enabled
 			: SendMenu::SpoilerState::Possible;
 		const auto way = _sendWay.current();
-		const auto canMoveCaption = _list.canMoveCaption(
-			way.groupFiles() && way.sendImagesAsPhotos(),
-			way.sendImagesAsPhotos()
-		) && HasSendText(_caption);
+		const auto canMoveCaption = canMoveCaptionInCurrentSendWay()
+			&& HasSendText(_caption);
 		result.caption = !canMoveCaption
 			? SendMenu::CaptionState::None
 			: _invertCaption
@@ -885,7 +894,7 @@ void SendFilesBox::setupDragArea() {
 
 	const auto droppedCallback = [=](bool compress) {
 		return [=](const QMimeData *data) {
-			addFiles(data);
+			addFiles(data, compress);
 			_show->activate();
 		};
 	};
@@ -1031,6 +1040,23 @@ bool SendFilesBox::hasSpoilerMenu() const {
 bool SendFilesBox::hasSendLargePhotosOption() const {
 	return _list.hasSendLargePhotosOption(
 		_sendWay.current().sendImagesAsPhotos());
+}
+
+bool SendFilesBox::canMoveCaptionInCurrentSendWay() const {
+	const auto way = _sendWay.current();
+	if (!way.sendImagesAsPhotos() || !_list.canAddCaption(true)) {
+		return false;
+	}
+	const auto count = int(_list.files.size());
+	if (count < 1 || count > Ui::MaxAlbumItems()) {
+		return false;
+	}
+	const auto isPhotoOrVideo = [](const Ui::PreparedFile &file) {
+		return file.type == Ui::PreparedFile::Type::Photo
+			|| file.type == Ui::PreparedFile::Type::Video;
+	};
+	return (count == 1 || way.groupFiles())
+		&& ranges::all_of(_list.files, isPhotoOrVideo);
 }
 
 bool SendFilesBox::canChangePrice() const {
@@ -1874,7 +1900,8 @@ void SendFilesBox::setupCaption() {
 	}
 	_caption->setSubmitSettings(
 		Core::App().settings().sendSubmitWay());
-	_caption->setMaxLength(kMaxMessageLength);
+	_caption->setMaxLength(
+		Data::PremiumLimits(&_show->session()).captionLengthCurrent());
 
 	_caption->heightChanges(
 	) | rpl::on_next([=] {
@@ -2086,7 +2113,9 @@ void SendFilesBox::captionResized() {
 	update();
 }
 
-bool SendFilesBox::addFiles(not_null<const QMimeData*> data) {
+bool SendFilesBox::addFiles(
+		not_null<const QMimeData*> data,
+		std::optional<bool> overrideSendImagesAsPhotos) {
 	const auto premium = _show->session().premium();
 	auto list = [&] {
 		const auto urls = Core::ReadMimeUrls(data);
@@ -2108,13 +2137,30 @@ bool SendFilesBox::addFiles(not_null<const QMimeData*> data) {
 		}
 		return result;
 	}();
+	if (overrideSendImagesAsPhotos.has_value()) {
+		list.overrideSendImagesAsPhotos = overrideSendImagesAsPhotos;
+	}
 	return addFiles(std::move(list));
+}
+
+void SendFilesBox::applySendImagesAsPhotosOverride(
+		const Ui::PreparedList &list) {
+	if (!list.overrideSendImagesAsPhotos.has_value()) {
+		return;
+	}
+	_list.overrideSendImagesAsPhotos = list.overrideSendImagesAsPhotos;
+	auto candidate = _sendWay.current();
+	candidate.setSendImagesAsPhotos(*list.overrideSendImagesAsPhotos);
+	if (checkWith(list, candidate, true)) {
+		_sendWay = candidate;
+	}
 }
 
 bool SendFilesBox::addFiles(Ui::PreparedList list) {
 	if (list.error != Ui::PreparedList::Error::None) {
 		return false;
 	}
+	applySendImagesAsPhotosOverride(list);
 	const auto count = int(_list.files.size());
 	_list.filesToProcess.insert(
 		_list.filesToProcess.end(),

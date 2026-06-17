@@ -30,6 +30,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/components/top_peers.h"
 #include "data/notify/data_notify_settings.h"
 #include "data/stickers/data_stickers.h"
+#include "data/data_ai_compose_tones.h"
 #include "data/data_saved_messages.h"
 #include "data/data_saved_sublist.h"
 #include "data/data_session.h"
@@ -1110,6 +1111,10 @@ void Updates::handleSendActionUpdate(
 		const auto &data = action.c_sendMessageTextDraftAction();
 		history->streamedDrafts().apply(rootId, fromId, when, data);
 		return;
+	} else if (action.type() == mtpc_sendMessageRichMessageDraftAction) {
+		const auto &data = action.c_sendMessageRichMessageDraftAction();
+		history->streamedDrafts().apply(rootId, fromId, when, data);
+		return;
 	}
 	session().data().sendActionManager().registerFor(
 		history,
@@ -1209,6 +1214,7 @@ void Updates::applyUpdatesNoPtsCheck(const MTPUpdates &updates) {
 				d.vfwd_from() ? *d.vfwd_from() : MTPMessageFwdHeader(),
 				MTP_long(d.vvia_bot_id().value_or_empty()),
 				MTPlong(), // via_business_bot_id
+				MTPPeer(), // guestchat_via_from
 				d.vreply_to() ? *d.vreply_to() : MTPMessageReplyHeader(),
 				d.vdate(),
 				d.vmessage(),
@@ -1231,7 +1237,8 @@ void Updates::applyUpdatesNoPtsCheck(const MTPUpdates &updates) {
 				MTPlong(), // paid_message_stars
 				MTPSuggestedPost(),
 				MTPint(), // schedule_repeat_period
-				MTPstring()), // summary_from_language
+				MTPstring(), // summary_from_language
+				MTPRichMessage()),
 			MessageFlags(),
 			NewMessageType::Unread);
 	} break;
@@ -1252,6 +1259,7 @@ void Updates::applyUpdatesNoPtsCheck(const MTPUpdates &updates) {
 				d.vfwd_from() ? *d.vfwd_from() : MTPMessageFwdHeader(),
 				MTP_long(d.vvia_bot_id().value_or_empty()),
 				MTPlong(), // via_business_bot_id
+				MTPPeer(), // guestchat_via_from
 				d.vreply_to() ? *d.vreply_to() : MTPMessageReplyHeader(),
 				d.vdate(),
 				d.vmessage(),
@@ -1274,7 +1282,8 @@ void Updates::applyUpdatesNoPtsCheck(const MTPUpdates &updates) {
 				MTPlong(), // paid_message_stars
 				MTPSuggestedPost(),
 				MTPint(), // schedule_repeat_period
-				MTPstring()), // summary_from_language
+				MTPstring(), // summary_from_language
+				MTPRichMessage()),
 			MessageFlags(),
 			NewMessageType::Unread);
 	} break;
@@ -2229,6 +2238,15 @@ void Updates::feedUpdate(const MTPUpdate &update) {
 		session().data().webViewResultSent({ .queryId = d.vquery_id().v });
 	} break;
 
+	case mtpc_updateJoinChatWebViewDecision: {
+		const auto &d = update.c_updateJoinChatWebViewDecision();
+		session().data().joinChatWebViewDecision({
+			.peerId = peerFromMTP(d.vpeer()),
+			.queryId = uint64(d.vquery_id().v),
+			.result = d.vresult(),
+		});
+	} break;
+
 	case mtpc_updateBotMenuButton: {
 		const auto &d = update.c_updateBotMenuButton();
 		if (const auto bot = session().data().userLoaded(d.vbot_id())) {
@@ -2775,6 +2793,10 @@ void Updates::feedUpdate(const MTPUpdate &update) {
 
 	case mtpc_updateSavedRingtones: {
 		session().api().ringtones().applyUpdate();
+	} break;
+
+	case mtpc_updateAiComposeTones: {
+		session().data().aiComposeTones().applyUpdate();
 	} break;
 
 	case mtpc_updateTranscribedAudio: {
