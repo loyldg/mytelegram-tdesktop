@@ -45,6 +45,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/text/text_utilities.h"
 #include "ui/controls/delete_message_context_action.h"
 #include "ui/controls/who_reacted_context_action.h"
+#include "ui/delayed_activation.h"
 #include "ui/dynamic_image.h"
 #include "ui/dynamic_thumbnails.h"
 #include "ui/boxes/edit_factcheck_box.h"
@@ -291,13 +292,14 @@ void AddDocumentActions(
 			[=] { ShowStickerPackInfo(document, list); },
 			&st::menuIconStickers);
 	}
-	if (document->sticker() && !document->sticker()->set) {
+	const auto sending = item && item->isSending();
+	if (!sending && document->sticker() && !document->sticker()->set) {
 		Api::AddAddToOwnedSetAction(
 			Ui::Menu::CreateAddActionCallback(menu),
 			controller->uiShow(),
 			document);
 	}
-	if (document->sticker()) {
+	if (!sending && document->sticker()) {
 		const auto isFaved = document->owner().stickers().isFaved(document);
 		menu->addAction(
 			(isFaved
@@ -750,6 +752,9 @@ bool AddEditMessageAction(
 		const auto item = owner->message(itemId);
 		if (!item) {
 			return;
+		}
+		if (item->richPage()) {
+			Ui::PreventDelayedActivation();
 		}
 		list->editMessageRequestNotify(item->fullId());
 	}, &st::menuIconEdit);
@@ -1672,12 +1677,18 @@ void CopyPostLink(
 			).append('\n').append(Platform::IsMac()
 				? tr::lng_public_post_private_hint_cmd(tr::now)
 				: tr::lng_public_post_private_hint_ctrl(tr::now)),
+			.iconLottie = u"toast/voip_invite"_q,
+			.iconLottieSize = st::toastLottieIconSize,
 			.duration = kPublicPostLinkToastDuration,
 		});
+	} else if (isPublicLink) {
+		show->showToast({
+			.text = { tr::lng_channel_public_link_copied(tr::now) },
+			.iconLottie = u"toast/voip_invite"_q,
+			.iconLottieSize = st::toastLottieIconSize,
+		});
 	} else {
-		show->showToast(isPublicLink
-			? tr::lng_channel_public_link_copied(tr::now)
-			: tr::lng_context_about_private_link(tr::now));
+		show->showToast(tr::lng_context_about_private_link(tr::now));
 	}
 }
 
@@ -1692,7 +1703,11 @@ void CopyStoryLink(
 	const auto story = *maybeStory;
 	QGuiApplication::clipboard()->setText(
 		session->api().exportDirectStoryLink(story));
-	show->showToast(tr::lng_channel_public_link_copied(tr::now));
+	show->showToast({
+		.text = { tr::lng_channel_public_link_copied(tr::now) },
+		.iconLottie = u"toast/voip_invite"_q,
+		.iconLottieSize = st::toastLottieIconSize,
+	});
 }
 
 void FillPollOptionPage(
