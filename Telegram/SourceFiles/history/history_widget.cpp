@@ -393,7 +393,9 @@ HistoryWidget::HistoryWidget(
 	}), lifetime());
 
 	_scroll->setBottomContentRequest([=] {
-		if (!_history || !_history->loadedAtBottom()) {
+		if (!_history
+			|| _firstLoadRequest
+			|| !_history->loadedAtBottom()) {
 			return false;
 		}
 		using Result = Data::SponsoredMessages::AppendResult;
@@ -2267,9 +2269,10 @@ std::unique_ptr<Data::Draft> HistoryWidget::readThreadFieldDraft() const {
 		return nullptr;
 	}
 	auto result = std::make_unique<Data::Draft>(
-		_field,
+		_field->getTextWithAppliedMarkdown(),
 		_replyTo,
 		suggestOptions(),
+		MessageCursor(_field),
 		_preview ? _preview->draft() : Data::WebPageDraft());
 	return Data::DraftIsNull(result.get()) ? nullptr : std::move(result);
 }
@@ -3174,7 +3177,6 @@ void HistoryWidget::showHistory(
 			}
 		}
 
-		_scroll->hide();
 		_list = _scroll->setOwnedWidget(
 			object_ptr<HistoryInner>(this, _scroll, controller(), _history));
 		_pullToNext->attachToContent(_list);
@@ -3930,13 +3932,7 @@ void HistoryWidget::updateControlsVisibility() {
 		return;
 	}
 
-	if (_firstLoadRequest && !_scroll->isHidden()) {
-		if (Ui::InFocusChain(_scroll.data())) {
-			// Don't loose focus back to chats list.
-			setFocus();
-		}
-		_scroll->hide();
-	} else if (!_firstLoadRequest && _scroll->isHidden()) {
+	if (_scroll->isHidden()) {
 		_scroll->show();
 	}
 	_topBars->show();
@@ -4306,7 +4302,7 @@ void HistoryWidget::destroyUnreadBar() {
 void HistoryWidget::destroyUnreadBarOnClose() {
 	if (!_history || !_historyInited) {
 		return;
-	} else if (_scroll->scrollTop() == _scroll->scrollTopMax()) {
+	} else if (_scroll->scrollTop() >= _scroll->scrollTopMax()) {
 		destroyUnreadBar();
 		return;
 	}
@@ -4803,6 +4799,8 @@ void HistoryWidget::loadMessages() {
 bool HistoryWidget::historyLoadedAtTop() const {
 	if (!_history) {
 		return true;
+	} else if (_firstLoadRequest) {
+		return false;
 	}
 	const auto loadMigrated = _migrated
 		&& (_history->isEmpty()
@@ -4813,8 +4811,16 @@ bool HistoryWidget::historyLoadedAtTop() const {
 }
 
 bool HistoryWidget::historyLoadedAtBottom() const {
+	// While the first load request is pending the (visible) scroll area
+	// shows a blank list, but getReadyFor() may have already marked the
+	// history as loaded at bottom before any server page arrived. Report
+	// unloaded edges for that interval: it keeps the elastic overscroll
+	// (and the pull-to-next-channel gesture riding on it) away from the
+	// blank list until the requested messages are actually shown.
 	if (!_history) {
 		return true;
+	} else if (_firstLoadRequest) {
+		return false;
 	}
 	const auto loadMigrated = _migrated
 		&& !(_migrated->isEmpty()
@@ -5009,7 +5015,7 @@ bool HistoryWidget::isItemCompletelyHidden(HistoryItem *item) const {
 }
 
 void HistoryWidget::visibleAreaUpdated() {
-	if (_list && !_scroll->isHidden()) {
+	if (_list && !_firstLoadRequest && !_scroll->isHidden()) {
 		const auto scrollTop = _scroll->scrollTop();
 		const auto scrollBottom = scrollTop + _scroll->height();
 		_list->visibleAreaUpdated(scrollTop, scrollBottom);
@@ -8115,12 +8121,11 @@ void HistoryWidget::updateHistoryGeometry(
 	});
 	if (!_history
 		|| (initial && _historyInited)
-		|| (!initial && !_historyInited)) {
+		|| (!initial && !_historyInited && !_firstLoadRequest)) {
 		return;
 	}
-	if (_firstLoadRequest || _showAnimation) {
+	if (_showAnimation) {
 		_updateHistoryGeometryRequired = true;
-		// scrollTopMax etc are not working after recountHistoryGeometry()
 		return;
 	}
 
@@ -8186,7 +8191,7 @@ void HistoryWidget::updateHistoryGeometry(
 		return;
 	}
 	const auto wasScrollTop = _scroll->scrollTop();
-	const auto wasAtBottom = (wasScrollTop == _scroll->scrollTopMax());
+	const auto wasAtBottom = (wasScrollTop >= _scroll->scrollTopMax());
 	const auto needResize = (_scroll->width() != newScrollWidth)
 		|| (_scroll->height() != newScrollHeight);
 	if (needResize) {
@@ -8216,6 +8221,16 @@ void HistoryWidget::updateHistoryGeometry(
 			- subsectionTabsTop;
 		_subsectionTabs->setBoundingRect(
 			{ 0, subsectionTabsTop, width(), areaHeight });
+	}
+	if (_firstLoadRequest) {
+		// The scroll area stays visible (and possibly focused) while the
+		// first messages are being loaded, so its viewport geometry above
+		// is maintained even now. The list layout and the scroll position
+		// are still deferred until the requested messages arrive:
+		// scrollTopMax etc are not working after recountHistoryGeometry()
+		// and the initial scroll position can not be counted yet.
+		_updateHistoryGeometryRequired = true;
+		return;
 	}
 
 	updateListSize();
@@ -8278,7 +8293,7 @@ void HistoryWidget::revealItemsCallback() {
 	}
 	if (_itemsRevealHeight != height) {
 		const auto wasScrollTop = _scroll->scrollTop();
-		const auto wasAtBottom = (wasScrollTop == _scroll->scrollTopMax());
+		const auto wasAtBottom = (wasScrollTop >= _scroll->scrollTopMax());
 		if (!wasAtBottom) {
 			height = 0;
 			_itemRevealAnimations.clear();
