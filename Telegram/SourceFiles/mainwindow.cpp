@@ -46,8 +46,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "window/window_session_controller.h"
 #include "window/window_setup_email.h"
 #include "window/window_media_preview.h"
-#include "styles/style_dialogs.h"
-#include "styles/style_layers.h"
 #include "styles/style_window.h"
 
 #include <QtGui/QWindow>
@@ -250,7 +248,6 @@ void MainWindow::clearSetupEmailLock() {
 		_main->show();
 		updateControlsGeometry();
 		_main->showAnimated(std::move(oldContentCache), true);
-		Core::App().checkStartUrls();
 	}
 }
 

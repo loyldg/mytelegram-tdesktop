@@ -99,13 +99,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "window/window_session_controller.h"
 #include "ui/toast/toast.h"
 #include "boxes/sticker_set_box.h"
-#include "styles/style_boxes.h"
-#include "styles/style_chat_helpers.h"
 #include "styles/style_chat.h"
 #include "styles/style_info.h"
+#include "styles/style_info_profile_top_bar.h"
 #include "styles/style_layers.h"
 #include "styles/style_menu_icons.h"
-#include "styles/style_settings.h"
 
 #include <QtGui/QClipboard>
 #include <QtGui/QGuiApplication>
@@ -1317,7 +1315,8 @@ void TopBar::setupUserpicButton(
 			: (user && !user->isSelf() && !_peer->isBot())
 			? &tr::lng_profile_set_personal_sure
 			: nullptr;
-		const auto useForumShape = _peer->isForum() && !_peer->isBot();
+		const auto useForumShape = (_peer->userpicShape()
+			== Ui::PeerUserpicShape::Forum);
 		return Editor::EditorData{
 			.about = (phrase
 				? (*phrase)(
@@ -1377,10 +1376,12 @@ void TopBar::setupUserpicButton(
 				this,
 				st::popupMenuWithIcons);
 
-			(*menu)->addAction(
-				tr::lng_profile_open_photo(tr::now),
-				openPhoto,
-				&st::menuIconPhoto);
+			if (_peer->userpicPhotoId()) {
+				(*menu)->addAction(
+					tr::lng_profile_open_photo(tr::now),
+					openPhoto,
+					&st::menuIconPhoto);
+			}
 
 			if (canReport()) {
 				(*menu)->addAction(

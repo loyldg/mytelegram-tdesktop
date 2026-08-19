@@ -48,8 +48,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_session_settings.h"
 #include "ui/basic_click_handlers.h"
 #include "window/window_session_controller.h"
-#include "styles/style_chat.h"
-#include "styles/style_iv.h"
 
 #include "rpl/filter.h"
 #include "rpl/lifetime.h"
@@ -303,6 +301,16 @@ public:
 
 	[[nodiscard]] MediaActivation activationAt(QPoint point) const override;
 
+	void clickHandlerActiveChanged(
+		const ClickHandlerPtr &handler,
+		bool active) override;
+
+	void clickHandlerPressedChanged(
+		const ClickHandlerPtr &handler,
+		bool pressed) override;
+
+	void updatePressed(QPoint point) override;
+
 	[[nodiscard]] MediaBlockSelectionData selectionData() const override;
 
 	[[nodiscard]] bool hasHeavyPart() const override;
@@ -315,6 +323,9 @@ public:
 
 private:
 	[[nodiscard]] bool alive() const override;
+
+	[[nodiscard]] bool acceptsVoiceSeekHandler(
+		const ClickHandlerPtr &handler) const;
 
 	[[nodiscard]] IvHistoryViewHit resolveHit(QPoint point) const;
 
@@ -460,6 +471,28 @@ MediaActivation IvHistoryViewBlock::activationAt(QPoint point) const {
 	return resolveHit(point).activation;
 }
 
+void IvHistoryViewBlock::clickHandlerActiveChanged(
+		const ClickHandlerPtr &handler,
+		bool active) {
+	if (acceptsVoiceSeekHandler(handler)) {
+		_media->clickHandlerActiveChanged(handler, active);
+	}
+}
+
+void IvHistoryViewBlock::clickHandlerPressedChanged(
+		const ClickHandlerPtr &handler,
+		bool pressed) {
+	if (acceptsVoiceSeekHandler(handler)) {
+		_media->clickHandlerPressedChanged(handler, pressed);
+	}
+}
+
+void IvHistoryViewBlock::updatePressed(QPoint point) {
+	if (acceptsVoiceSeekHandler(ClickHandler::getPressed())) {
+		_media->updatePressed(point - _geometry.topLeft());
+	}
+}
+
 MediaBlockSelectionData IvHistoryViewBlock::selectionData() const {
 	return {
 		.copyText = _copyText,
@@ -506,6 +539,15 @@ std::vector<QRect> IvHistoryViewBlock::itemRects() const {
 			grouped->groupItemRect(i).translated(_geometry.topLeft()));
 	}
 	return result;
+}
+
+bool IvHistoryViewBlock::acceptsVoiceSeekHandler(
+		const ClickHandlerPtr &handler) const {
+	return _supported
+		&& _media
+		&& alive()
+		&& (_kind == IvHistoryViewMediaKind::Audio)
+		&& std::dynamic_pointer_cast<VoiceSeekClickHandler>(handler);
 }
 
 IvHistoryViewHit IvHistoryViewBlock::resolveHit(QPoint point) const {
