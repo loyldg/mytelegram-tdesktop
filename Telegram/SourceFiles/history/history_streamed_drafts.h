@@ -10,8 +10,16 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/timer.h"
 #include "base/weak_ptr.h"
 
+#include <memory>
+
 class History;
 class MTPDmessage;
+class MTPDsendMessageRichMessageDraftAction;
+class MTPDsendMessageTextDraftAction;
+
+namespace Iv {
+struct RichPage;
+} // namespace Iv
 
 class HistoryStreamedDrafts final : public base::has_weak_ptr {
 public:
@@ -25,21 +33,65 @@ public:
 		PeerId fromId,
 		TimeId when,
 		const MTPDsendMessageTextDraftAction &data);
+	void apply(
+		MsgId rootId,
+		PeerId fromId,
+		TimeId when,
+		const MTPDsendMessageRichMessageDraftAction &data);
+	void applyStop(uint64 randomId);
+
+	[[nodiscard]] bool stoppableFor(MsgId rootId) const;
+	void requestStop(MsgId rootId);
 
 	[[nodiscard]] bool hasFor(not_null<HistoryItem*> item) const;
 	void applyItemRemoved(not_null<HistoryItem*> item);
 	HistoryItem *adoptIncoming(const MTPDmessage &data);
 
 private:
+	enum class DraftKind {
+		Text,
+		Rich,
+	};
+
+	struct DraftContent {
+		TextWithEntities text;
+		std::shared_ptr<const Iv::RichPage> richPage;
+		QString matchText;
+		DraftKind kind = DraftKind::Text;
+		bool canStop = false;
+		bool keepOnStop = false;
+	};
+
 	struct Draft {
 		not_null<HistoryItem*> message;
 		MsgId rootId = 0;
 		PeerId fromId = 0;
 		crl::time updated = 0;
+		MsgId topMsgId = 0;
+		DraftKind kind = DraftKind::Text;
+		bool canStop = false;
+		bool keepOnStop = false;
+		QString matchText;
 	};
 
-	bool update(uint64 randomId, const TextWithEntities &text);
+	bool update(uint64 randomId, DraftContent &&content);
+	void applyPrepared(
+		MsgId rootId,
+		PeerId fromId,
+		TimeId when,
+		uint64 randomId,
+		DraftContent &&content);
+	[[nodiscard]] DraftContent prepareContent(
+		const MTPDsendMessageTextDraftAction &data);
+	[[nodiscard]] DraftContent prepareContent(
+		const MTPDsendMessageRichMessageDraftAction &data);
+	[[nodiscard]] std::optional<uint64> previousRandomId(
+		MsgId rootId,
+		PeerId fromId) const;
+	[[nodiscard]] std::optional<uint64> stoppableRandomId(
+		MsgId rootId) const;
 	void clearByRandomId(uint64 randomId);
+	void notifyStopChanged();
 
 	void check();
 	void scheduleDestroy();
@@ -48,6 +100,7 @@ private:
 
 	const not_null<History*> _history;
 	base::flat_map<uint64, Draft> _drafts;
+	base::flat_set<uint64> _stoppedRandomIds;
 
 	base::Timer _checkTimer;
 

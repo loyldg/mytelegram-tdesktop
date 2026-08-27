@@ -39,7 +39,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_intro.h" // introFragmentIcon.
 #include "styles/style_layers.h"
 #include "styles/style_settings.h"
-#include "styles/style_widgets.h"
 
 #include <QtSvg/QSvgRenderer>
 
@@ -80,7 +79,7 @@ PaintRoundImageCallback MultiThumbnail(
 		q.setBrush(st::shadowFg);
 		q.drawRoundedRect(QRect(0, shift, smaller, smaller), radius, radius);
 		q.setPen(st::toastFg);
-		q.setFont(style::font(smaller / 2, style::FontFlag::Semibold, 0));
+		q.setFont(style::font(smaller / 2, style::FontFlag::Bold, 0));
 		q.drawText(
 			QRect(0, shift, smaller, smaller),
 			QString::number(totalCount),
@@ -105,43 +104,47 @@ QByteArray CreditsIconSvg(int strokeWidth) {
 
 } // namespace
 
-QImage GenerateStars(int height, int count) {
+QImage GenerateStars(int height, int count, int ratio) {
 	constexpr auto kOutlineWidth = .6;
 	constexpr auto kStrokeWidth = 3;
 	constexpr auto kShift = 3;
 
+	if (!ratio) {
+		ratio = style::DevicePixelRatio();
+	}
 	auto svg = QSvgRenderer(CreditsIconSvg(kStrokeWidth));
 	svg.setViewBox(svg.viewBox() + Margins(kStrokeWidth));
 
 	const auto starSize = Size(height - kOutlineWidth * 2);
 
 	auto frame = QImage(
-		QSize(
-			(height + kShift * (count - 1)) * style::DevicePixelRatio(),
-			height * style::DevicePixelRatio()),
+		QSize((height + kShift * (count - 1)) * ratio, height * ratio),
 		QImage::Format_ARGB32_Premultiplied);
-	frame.setDevicePixelRatio(style::DevicePixelRatio());
+	frame.setDevicePixelRatio(ratio);
 	frame.fill(Qt::transparent);
 	const auto drawSingle = [&](QPainter &q) {
 		const auto s = kOutlineWidth;
 		q.save();
 		q.translate(s, s);
-		q.setCompositionMode(QPainter::CompositionMode_Clear);
-		svg.render(&q, QRectF(QPointF(s, 0), starSize));
-		svg.render(&q, QRectF(QPointF(s, s), starSize));
-		svg.render(&q, QRectF(QPointF(0, s), starSize));
-		svg.render(&q, QRectF(QPointF(-s, s), starSize));
-		svg.render(&q, QRectF(QPointF(-s, 0), starSize));
-		svg.render(&q, QRectF(QPointF(-s, -s), starSize));
-		svg.render(&q, QRectF(QPointF(0, -s), starSize));
-		svg.render(&q, QRectF(QPointF(s, -s), starSize));
-		q.setCompositionMode(QPainter::CompositionMode_SourceOver);
+		if (count > 1) {
+			// Cut a gap in the star below, they overlap by kShift.
+			q.setCompositionMode(QPainter::CompositionMode_Clear);
+			svg.render(&q, QRectF(QPointF(s, 0), starSize));
+			svg.render(&q, QRectF(QPointF(s, s), starSize));
+			svg.render(&q, QRectF(QPointF(0, s), starSize));
+			svg.render(&q, QRectF(QPointF(-s, s), starSize));
+			svg.render(&q, QRectF(QPointF(-s, 0), starSize));
+			svg.render(&q, QRectF(QPointF(-s, -s), starSize));
+			svg.render(&q, QRectF(QPointF(0, -s), starSize));
+			svg.render(&q, QRectF(QPointF(s, -s), starSize));
+			q.setCompositionMode(QPainter::CompositionMode_SourceOver);
+		}
 		svg.render(&q, Rect(starSize));
 		q.restore();
 	};
 	{
 		auto q = QPainter(&frame);
-		q.translate(frame.width() / style::DevicePixelRatio() - height, 0);
+		q.translate(frame.width() / ratio - height, 0);
 		for (auto i = count; i > 0; --i) {
 			drawSingle(q);
 			q.translate(-kShift, 0);
@@ -586,6 +589,8 @@ TextWithEntities GenerateEntryName(const Data::CreditsHistoryEntry &entry) {
 		? tr::lng_credits_box_history_entry_api
 		: entry.reaction
 		? tr::lng_credits_box_history_entry_reaction_name
+		: entry.giftOffer
+		? tr::lng_credits_box_history_entry_gift_offer
 		: entry.giftResale
 		? (entry.in
 			? tr::lng_credits_box_history_entry_gift_sold

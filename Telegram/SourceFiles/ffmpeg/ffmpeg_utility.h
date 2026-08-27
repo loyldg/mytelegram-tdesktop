@@ -38,6 +38,9 @@ inline constexpr auto kAVBlockSize = 4096; // 4Kb for ffmpeg blocksize
 constexpr auto kUniversalTimeBase = AVRational{ 1, AV_TIME_BASE };
 constexpr auto kNormalAspect = AVRational{ 1, 1 };
 
+extern const char kOptionFFmpegMultiThread[];
+extern const char kOptionFFmpegThreadCount[];
+
 class AvErrorWrap {
 public:
 	AvErrorWrap(int code = 0) : _code(code) {
@@ -146,6 +149,15 @@ using FormatPointer = std::unique_ptr<AVFormatContext, FormatDeleter>;
 	int64_t(*seek)(void *opaque, int64_t offset, int whence),
 	const QByteArray &format);
 
+// Forbids ffmpeg from opening any external resource (network URL or local
+// file) referenced by the media being decoded. All our input is provided
+// through custom IO callbacks, so no protocol is ever needed for the input
+// itself; an empty whitelist stops demuxers like dash / hls from fetching the
+// segment URLs they may reference in the file (which would otherwise leak the
+// user's IP or read arbitrary local files). Call on a freshly allocated
+// context, before avformat_open_input().
+void RestrictToCustomIO(AVFormatContext *format);
+
 struct CodecDeleter {
 	void operator()(AVCodecContext *value);
 };
@@ -214,6 +226,7 @@ void LogError(
 	const QString &details = {});
 
 [[nodiscard]] const AVCodec *FindDecoder(not_null<AVCodecContext*> context);
+[[nodiscard]] int64_t MaxPixelsForAreaLimit(int64_t area);
 [[nodiscard]] crl::time PtsToTime(int64_t pts, AVRational timeBase);
 // Used for full duration conversion.
 [[nodiscard]] crl::time PtsToTimeCeil(int64_t pts, AVRational timeBase);

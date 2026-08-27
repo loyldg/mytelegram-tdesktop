@@ -17,6 +17,7 @@ apps:
     plugs:
       - audio-playback
       - audio-record
+      - bluez
       - camera
       - hardware-observe
       - home
@@ -24,6 +25,7 @@ apps:
       - network-bind
       - network-status
       - removable-media
+      - u2f-devices
     slots:
       - mpris
 
@@ -38,16 +40,15 @@ parts:
     source-type: git
     parse-info: [usr/share/metainfo/org.telegram.desktop.metainfo.xml]
     build-environment:
-      - LDFLAGS: ${LDFLAGS:+$LDFLAGS} -Wl,--push-state,--no-as-needed,-ldav1d,--pop-state -s
+      - LDFLAGS: ${LDFLAGS:+$LDFLAGS} -Wl,--push-state,--no-as-needed,-ldav1d,--pop-state
     build-packages:
-      - clang
       - libboost-regex-dev
       - libheif-dev
       - libjxl-dev
+      - liblz4-dev
       - libssl-dev
       - libxcb-keysyms1-dev
       - libxcb-record0-dev
-      - libxcb-screensaver0-dev
     cmake-generator: Ninja
     cmake-parameters:
       - -DCMAKE_BUILD_TYPE=Release
@@ -70,6 +71,7 @@ parts:
       craftctl set version="$version"
     override-build: |
       craftctl default
+      "$CRAFT_PART_SRC/Telegram/build/minidebug.sh" "$CRAFT_PART_INSTALL/usr/bin/Telegram"
       mv "$CRAFT_PART_INSTALL"/usr/bin/{Telegram,telegram-desktop}
 
       APP_ID=org.telegram.desktop
@@ -87,9 +89,9 @@ parts:
       - ada
       - avif
       - ffmpeg
+      - minizip
       - mozjpeg
       - openal
-      - protobuf
       - qt
       - rnnoise
       - tde2e
@@ -104,7 +106,6 @@ parts:
       - libopenh264-7
       - libxcb-cursor0
       - libxcb-record0
-      - libxcb-screensaver0
     stage:
       - ./usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/gstreamer-1.0/libgstde265.so
       - ./usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/gstreamer-1.0/libgstfdkaac.so
@@ -117,12 +118,11 @@ parts:
       - ./usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/libopenh264.so*
       - ./usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/libxcb-cursor.so*
       - ./usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/libxcb-record.so*
-      - ./usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/libxcb-screensaver.so*
 
   patches:
     source: https://github.com/desktop-app/patches.git
     source-depth: 1
-    source-commit: 4519c85c924b9da81f29d4aac045886f896ee479
+    source-commit: 27efa67b60881c52b112cf924d705e573d03a0ab
     plugin: nil
     override-pull: |
       craftctl default
@@ -163,7 +163,7 @@ parts:
   ffmpeg:
     source: https://github.com/FFmpeg/FFmpeg.git
     source-depth: 1
-    source-branch: n6.1.1
+    source-branch: n6.1.6
     plugin: autotools
     build-packages:
       - nasm
@@ -317,6 +317,18 @@ parts:
     after:
       - nv-codec-headers
 
+  minizip:
+    source: https://github.com/madler/zlib.git
+    source-depth: 1
+    source-commit: e3dc0a85b7032e98380dec011bc8f2c2ee0d8fca
+    source-subdir: contrib/minizip
+    plugin: autotools
+    autotools-configure-parameters:
+      - --prefix=/usr
+      - --libdir=\${exec_prefix}/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR
+      - --disable-shared
+    prime: [-./*]
+
   mozjpeg:
     source: https://github.com/mozilla/mozjpeg.git
     source-depth: 1
@@ -326,6 +338,7 @@ parts:
     cmake-parameters:
       - -DCMAKE_BUILD_TYPE=Release
       - -DCMAKE_INSTALL_PREFIX=/usr
+      - -DCMAKE_POLICY_VERSION_MINIMUM=3.5
       - -DENABLE_SHARED=OFF
       - -DWITH_JPEG8=ON
       - -DPNG_SUPPORTED=OFF
@@ -360,22 +373,10 @@ parts:
       - LIBDIR=lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR
     prime: [-./*]
 
-  protobuf:
-    source: https://github.com/protocolbuffers/protobuf.git
-    source-depth: 1
-    source-tag: v30.2
-    plugin: cmake
-    cmake-generator: Ninja
-    cmake-parameters:
-      - -DCMAKE_BUILD_TYPE=Release
-      - -DCMAKE_INSTALL_PREFIX=/usr
-      - -Dprotobuf_BUILD_TESTS=OFF
-    prime: [-./*]
-
   qt:
     source: https://github.com/qt/qt5.git
     source-depth: 1
-    source-tag: v6.11.0
+    source-tag: v6.11.1
     source-submodules:
       - qtbase
       - qtdeclarative

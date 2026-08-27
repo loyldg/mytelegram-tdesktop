@@ -22,6 +22,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "window/window_controller.h"
 #include "window/window_session_controller.h"
 #include "platform/mac/global_menu_mac.h"
+#include "platform/mac/native_event_mac.h"
 #include "platform/mac/touchbar/mac_touchbar_manager.h"
 #include "platform/platform_specific.h"
 #include "platform/platform_notifications_manager.h"
@@ -58,32 +59,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 @end // @interface MainWindowObserver
 
 namespace Platform {
+
 namespace {
 
 // When we close a window that is fullscreen we first leave the fullscreen
 // mode and after that hide the window. This is a timeout for elaving the
 // fullscreen mode, after that we'll hide the window no matter what.
 constexpr auto kHideAfterFullscreenTimeoutMs = 3000;
-
-[[nodiscard]] bool PossiblyTextTypingEvent(NSEvent *e) {
-	if ([e type] != NSEventTypeKeyDown) {
-		return false;
-	}
-	NSEventModifierFlags flags = [e modifierFlags]
-		& NSEventModifierFlagDeviceIndependentFlagsMask;
-	if ((flags & ~NSEventModifierFlagShift) != 0) {
-		return false;
-	}
-	NSString *text = [e characters];
-	const auto length = int([text length]);
-	for (auto i = 0; i != length; ++i) {
-		const auto utf16 = [text characterAtIndex:i];
-		if (utf16 >= 32) {
-			return true;
-		}
-	}
-	return false;
-}
 
 } // namespace
 
@@ -113,6 +95,7 @@ private:
 	NSView * __weak _nativeView = nil;
 
 	MainWindowObserver *_observer = nullptr;
+	RootTouchBar *_touchBar = nil;
 
 };
 
@@ -217,16 +200,29 @@ void MainWindow::Private::initTouchBar(
 	[NSApplication sharedApplication]
 		.automaticCustomizeTouchBarMenuItemEnabled = true;
 
+	_touchBar = [[RootTouchBar alloc]
+		init:_markdownState.value()
+		controller:controller
+		domain:(&Core::App().domain())];
 	[window
 		performSelectorOnMainThread:@selector(setTouchBar:)
-		withObject:[[[RootTouchBar alloc]
-			init:_markdownState.value()
-			controller:controller
-			domain:(&Core::App().domain())] autorelease]
+		withObject:_touchBar
 		waitUntilDone:true];
 }
 
 MainWindow::Private::~Private() {
+	[_touchBar invalidate];
+	[_touchBar release];
+	_touchBar = nil;
+	if (_nativeWindow) {
+		[_nativeWindow setTouchBar:nil];
+	}
+	@autoreleasepool {
+		[[[NSWorkspace sharedWorkspace] notificationCenter]
+			removeObserver:_observer];
+		[[NSDistributedNotificationCenter defaultCenter]
+			removeObserver:_observer];
+	}
 	[_observer release];
 }
 
