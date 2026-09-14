@@ -386,7 +386,10 @@ void ListWidget::enumerateUserpics(Method method) {
 
 		// Call method on a userpic for all messages that have it and for those who are not showing it
 		// because of their attachment to the next message if they are bottom-most visible.
-		if (view->displayFromPhoto() || (view->hasFromPhoto() && itembottom >= _visibleBottom)) {
+		if (view->displayFromPhoto()
+			|| (view->hasFromPhoto()
+				&& view->isAttachedToNext()
+				&& itembottom >= _visibleBottom)) {
 			if (lowestAttachedItemTop < 0) {
 				lowestAttachedItemTop = itemtop + view->marginTop();
 			}
@@ -2277,9 +2280,12 @@ auto ListWidget::findViewForPinnedTracking(int top) const
 			top,
 			std::less<>(),
 			&Element::y);
-		return (first == end(_items) || (*first)->y() > top)
-			? first - 1
-			: first;
+		if (first == end(_items) || (*first)->y() > top) {
+			// 'top' may be above the first item, then lower_bound()
+			// returns begin() and 'first - 1' would read _items[-1].
+			return (first == begin(_items)) ? first : (first - 1);
+		}
+		return first;
 	};
 	const auto findView = [&](int top)
 	-> std::pair<std::vector<not_null<Element*>>::const_iterator, int> {
@@ -3232,18 +3238,15 @@ void ListWidget::paintUserpics(
 		// paint the userpic if it intersects the painted rect
 		if (userpicTop + st::msgPhotoSize > clip.top()) {
 			const auto item = view->data();
-			const auto hasTranslation = context.gestureHorizontal.translation
-				&& (context.gestureHorizontal.msgBareId
-					== item->fullId().msg.bare);
-			if (hasTranslation) {
-				p.translate(context.gestureHorizontal.translation, 0);
+			const auto shift = context.gestureHorizontal.visualTranslationFor(
+				item->id.bare);
+			if (shift) {
+				p.translate(shift, 0);
 				update(
 					QRect(
-						st::historyPhotoLeft
-							+ context.gestureHorizontal.translation,
+						st::historyPhotoLeft + std::min(shift, 0),
 						userpicTop,
-						st::msgPhotoSize
-							- context.gestureHorizontal.translation,
+						st::msgPhotoSize + std::abs(shift),
 						st::msgPhotoSize));
 			}
 			if (const auto from = view->displayFrom()) {
@@ -3281,8 +3284,8 @@ void ListWidget::paintUserpics(
 			} else {
 				Unexpected("Corrupt forwarded information in message.");
 			}
-			if (hasTranslation) {
-				p.translate(-context.gestureHorizontal.translation, 0);
+			if (shift) {
+				p.translate(-shift, 0);
 			}
 		}
 		return true;
@@ -5966,6 +5969,12 @@ void ListWidget::overrideChatMode(std::optional<ElementChatMode> mode) {
 }
 
 ListWidget::~ListWidget() {
+	// Stop listening to session events before any member is destroyed:
+	// ~TranslateTracker reverts translations still in flight, which fires
+	// viewResizeRequest() back into this half-destroyed widget and through
+	// the delegate reaches listScrollTo() when its scroll is already gone.
+	lifetime().destroy();
+
 	// Destroy child widgets first, because they may invoke leaveEvent-s.
 	_emptyInfo = nullptr;
 	if (const auto raw = _menu.release()) {

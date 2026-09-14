@@ -20,6 +20,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/wrap/vertical_layout.h"
 #include "ui/wrap/slide_wrap.h"
 #include "ui/widgets/buttons.h"
+#include "ui/widgets/kinetic_scroller.h"
 #include "ui/widgets/labels.h"
 #include "ui/widgets/popup_menu.h"
 #include "ui/vertical_list.h"
@@ -45,7 +46,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "lang/lang_keys.h"
 #include "mainwindow.h"
 #include "mainwidget.h"
-#include "menu/menu_mark_as_read.h"
 #include "media/player/media_player_instance.h"
 #include "mtproto/session_private.h"
 #include "webview/webview_embed.h"
@@ -389,7 +389,6 @@ void SetupExperimental(
 				Dialogs::kOptionForumHideChatsList,
 				Dialogs::kOptionDialogsUnreadOnTop,
 				Dialogs::Ui::kOptionDialogsMuteIcon,
-				MarkAsReadMenu::kOptionMarkAsReadMutedChats,
 				kOptionUseNewChatView,
 				kOptionAutoScrollInactiveChat,
 				kModerateCommonGroups,
@@ -448,7 +447,9 @@ void SetupExperimental(
 				Ui::GL::kOptionUseQtRhi,
 				Ui::GL::kOptionEnableVulkanRhi,
 				Core::kOptionFreeType,
-				Ui::kOptionQScroller,
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+				Ui::kOptionKineticScroller,
+#endif
 				Window::kOptionDisableTouchbar,
 				Window::kOptionNewWindowsSizeAsFirst,
 			}
