@@ -151,6 +151,7 @@ constexpr auto kFullDayInMs = 86400 * 1000;
 constexpr auto kMouseEvents = {
 	QEvent::MouseMove,
 	QEvent::MouseButtonPress,
+	QEvent::MouseButtonDblClick,
 	QEvent::MouseButtonRelease
 };
 constexpr auto kRefreshSlowmodeLabelTimeout = crl::time(200);
@@ -541,7 +542,8 @@ void FieldHeader::init() {
 			return;
 		}
 		const auto isLeftButton = (e->button() == Qt::LeftButton);
-		if (type == QEvent::MouseButtonPress) {
+		if (type == QEvent::MouseButtonPress
+			|| type == QEvent::MouseButtonDblClick) {
 			if (isLeftButton && inPhotoEdit) {
 				_editPhotoRequests.fire({});
 			} else if (isLeftButton && inPreviewRect) {
@@ -2384,6 +2386,9 @@ auto ComposeControls::inlineResultChosen() const
 }
 
 void ComposeControls::showStarted() {
+	if (focused()) {
+		_parent->setFocus();
+	}
 	if (_inlineResults) {
 		_inlineResults->hideFast();
 	}
