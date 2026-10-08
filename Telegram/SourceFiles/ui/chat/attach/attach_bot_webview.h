@@ -11,10 +11,15 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/object_ptr.h"
 #include "base/weak_ptr.h"
 #include "base/flags.h"
+#include "ui/platform/ui_platform_utility.h"
 #include "ui/rect_part.h"
-#include "ui/round_rect.h"
+#include "ui/widgets/separate_panel.h"
 #include "webview/webview_common.h"
 #include <crl/crl_time.h>
+#include <QtCore/QRect>
+#include <QtCore/QSize>
+#include <QtGui/QColor>
+#include <QtGui/QImage>
 
 class QJsonObject;
 class QJsonValue;
@@ -23,19 +28,25 @@ namespace Ui {
 class FlatLabel;
 class BoxContent;
 class RpWidget;
-class SeparatePanel;
-class IconButton;
+class StandaloneLayerStack;
 enum class LayerOption;
 using LayerOptions = base::flags<LayerOption>;
 } // namespace Ui
 
 namespace Webview {
 struct Available;
+struct PopupArgs;
+struct PopupResult;
+enum class PermissionType;
 } // namespace Webview
 
 namespace Ui::Text {
 struct MarkedContext;
 } // namespace Ui::Text
+
+namespace Ui::BotWebView::LinuxShell {
+struct ResolvedColors;
+} // namespace Ui::BotWebView::LinuxShell
 
 namespace Ui::BotWebView {
 
@@ -51,6 +62,7 @@ enum class MenuButton {
 	RemoveFromMenu     = 0x02,
 	RemoveFromMainMenu = 0x04,
 	ShareGame          = 0x08,
+	Report             = 0x10,
 };
 inline constexpr bool is_flag_type(MenuButton) { return true; }
 using MenuButtons = base::flags<MenuButton>;
@@ -72,6 +84,13 @@ struct DownloadFileRequest {
 	QString url;
 	QString name;
 	Fn<void(bool)> callback;
+};
+
+struct ResolveButtonEmojiRequest {
+	uint64 customEmojiId = 0;
+	QColor textColor;
+	int size = 0;
+	Fn<void(QImage)> callback;
 };
 
 struct SendPreparedMessageRequest {
@@ -114,6 +133,7 @@ public:
 	virtual void botInvokeCustomMethod(CustomMethodRequest request) = 0;
 	virtual void botSetEmojiStatus(SetEmojiStatusRequest request) = 0;
 	virtual void botDownloadFile(DownloadFileRequest request) = 0;
+	virtual void botResolveButtonEmoji(ResolveButtonEmojiRequest request) = 0;
 	virtual void botSendPreparedMessage(
 		SendPreparedMessageRequest request) = 0;
 	virtual void botRequestChat(RequestChatRequest request) = 0;
@@ -126,11 +146,12 @@ struct Args {
 	QString url;
 	Webview::StorageId storageId;
 	rpl::producer<QString> title;
-	object_ptr<Ui::RpWidget> titleBadge = { nullptr };
+	Ui::TitleBadgeDescriptor titleBadge;
 	rpl::producer<QString> bottom;
 	not_null<Delegate*> delegate;
 	MenuButtons menuButtons;
 	bool fullscreen = false;
+	bool sameOrigin = false;
 	bool allowClipboardRead = false;
 	rpl::producer<DownloadsProgress> downloadsProgress;
 };
@@ -164,13 +185,66 @@ public:
 	[[nodiscard]] rpl::lifetime &lifetime();
 
 private:
+	struct ButtonArgs {
+		bool isActive = false;
+		bool isVisible = false;
+		bool isProgressVisible = false;
+		uint64 iconCustomEmojiId = 0;
+		QString text;
+	};
+	struct ExternalButtonState {
+		ButtonArgs args;
+		QColor color;
+		QColor textColor;
+		QString position;
+		uint64 iconGeneration = 0;
+	};
+	struct ExternalShellColorState {
+		bool titleUsesTheme = true;
+		bool bodyUsesTheme = true;
+		bool bottomUsesTheme = true;
+		std::optional<QColor> title;
+		std::optional<QColor> body;
+		std::optional<QColor> bottom;
+	};
+	struct ExternalShellAnchor {
+		std::optional<QSize> outerSize;
+		Platform::ForeignParent transientParent;
+	};
 	class Button;
 	struct Progress;
 	struct WebviewWithLifetime;
 
 	bool showWebview(Args &&args, const Webview::ThemeParams &params);
+	void invalidateExternalShellSession();
+	void showExternalShellError(TextWithEntities text);
 
 	bool createWebview(const Webview::ThemeParams &params);
+	void resetExternalShellIdentity();
+	[[nodiscard]] QWidget *webviewWindowForPopup() const;
+	void installExternalShellDocument();
+	void sendExternalShellBootstrap();
+	void sendExternalShellMethod(
+		const QByteArray &method,
+		const QJsonObject &data);
+	void sendExternalShellEvent(
+		const QString &event,
+		const QJsonObject &data);
+	void sendExternalShellButton(
+		const char *name,
+		const QJsonObject &args);
+	void sendExternalShellMenu();
+	void sendExternalShellAssets();
+	void handleExternalShellMenuAction(const QString &id);
+	void requestExternalShellButtonEmoji(const QString &name);
+	void applyExternalShellFullscreen(bool fullscreen);
+	void sendExternalShellChrome();
+	void setWebviewBlocked(bool blocked);
+	void closeExternalShellPopup();
+	[[nodiscard]] ExternalShellAnchor externalShellAnchor() const;
+	void showPopup(
+		Webview::PopupArgs &&args,
+		Fn<void(Webview::PopupResult)> done);
 	void createWebviewBottom();
 	void showWebviewProgress();
 	void hideWebviewProgress();
@@ -196,9 +270,16 @@ private:
 	void processHeaderColor(const QJsonObject &args);
 	void processBackgroundColor(const QJsonObject &args);
 	void processBottomBarColor(const QJsonObject &args);
+	void setExternalShellTitleColor(std::optional<QColor> color);
+	void setExternalShellBodyColor(std::optional<QColor> color);
+	void setExternalShellBottomColor(std::optional<QColor> color);
+	[[nodiscard]] LinuxShell::ResolvedColors externalShellColors(
+		const Webview::ThemeParams &params) const;
+	void sendExternalShellColors(const Webview::ThemeParams &params);
 	void processDownloadRequest(const QJsonObject &args);
 	void openTgLink(const QJsonObject &args);
 	void openExternalLink(const QJsonObject &args);
+	void confirmExternalLink(const QString &url, Fn<void()> open);
 	void openInvoice(const QJsonObject &args);
 	void openPopup(const QJsonObject &args);
 	void openScanQrPopup(const QJsonObject &args);
@@ -207,10 +288,12 @@ private:
 	void replyRequestWriteAccess(bool allowed);
 	void requestPhone();
 	void replyRequestPhone(bool shared);
+	void requestPermission(Webview::PermissionType type, Fn<void(bool)> done);
 	void invokeCustomMethod(const QJsonObject &args);
 	void replyCustomMethod(QJsonValue requestId, QJsonObject response);
 	void requestClipboardText(const QJsonObject &args);
 	void setupClosingBehaviour(const QJsonObject &args);
+	void requestClose();
 	void replyDeviceStorage(
 		const QJsonObject &args,
 		const QString &event,
@@ -232,7 +315,7 @@ private:
 	void postEvent(const QString &event);
 	void postEvent(const QString &event, EventData data);
 
-	[[nodiscard]] bool allowOpenLink() const;
+	[[nodiscard]] bool allowOpenLink();
 	[[nodiscard]] bool allowClipboardQuery() const;
 	[[nodiscard]] bool progressWithBackground() const;
 	[[nodiscard]] QRect progressRect() const;
@@ -241,11 +324,30 @@ private:
 
 	Webview::StorageId _storageId;
 	const not_null<Delegate*> _delegate;
+	QString _externalUrl;
+	QString _externalTitle;
+	int _webviewBlockCount = 0;
 	bool _closeNeedConfirmation = false;
 	bool _hasSettingsButton = false;
+	bool _externalTitleBadgeVisible = false;
+	bool _externalShell = false;
+	bool _externalShellBootstrapped = false;
+	bool _externalWindowCloseRequested = false;
+	QString _externalShellToken;
+	QString _initialOrigin;
+	QString _currentOrigin;
+	uint64 _externalShellGeneration = 0;
+	bool _externalBackVisible = false;
+	ExternalShellColorState _externalShellColorState;
 	MenuButtons _menuButtons = {};
+	ExternalButtonState _externalMainButton;
+	ExternalButtonState _externalSecondaryButton;
+	std::unique_ptr<RpWidget> _externalPanelParent;
 	std::unique_ptr<SeparatePanel> _widget;
 	std::unique_ptr<WebviewWithLifetime> _webview;
+	std::unique_ptr<StandaloneLayerStack> _externalLayer;
+	Fn<void()> _closeExternalShellPopup;
+	std::unique_ptr<RpWidget> _externalWebviewParent;
 	std::unique_ptr<RpWidget> _webviewBottom;
 	QPointer<FlatLabel> _webviewBottomLabel;
 	rpl::variable<QString> _bottomText;
@@ -263,14 +365,17 @@ private:
 	rpl::lifetime _bottomBarColorLifetime;
 	rpl::event_stream<> _downloadsUpdated;
 	rpl::variable<bool> _fullscreen = false;
-	crl::time _lastWebviewInteraction = 0;
+	crl::time _lastUserInteraction = 0;
+	crl::time _openLinkInteraction = 0;
 	bool _layerShown : 1 = false;
 	bool _webviewProgress : 1 = false;
 	bool _themeUpdateScheduled : 1 = false;
 	bool _hiddenForPayment : 1 = false;
 	bool _closeWithConfirmationScheduled : 1 = false;
 	bool _allowClipboardRead : 1 = false;
+	bool _sameOrigin : 1 = false;
 	bool _inBlockingRequest : 1 = false;
+	bool _closeRequested : 1 = false;
 	bool _headerColorReceived : 1 = false;
 	bool _bodyColorReceived : 1 = false;
 	bool _bottomColorReceived : 1 = false;

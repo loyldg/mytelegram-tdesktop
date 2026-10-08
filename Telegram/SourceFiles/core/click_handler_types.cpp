@@ -16,6 +16,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mainwidget.h"
 #include "main/main_session.h"
 #include "ui/boxes/confirm_box.h"
+#include "ui/text/text_utilities.h"
 #include "ui/toast/toast.h"
 #include "ui/widgets/popup_menu.h"
 #include "base/qthelp_regex.h"
@@ -45,9 +46,52 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtCore/QDateTime>
 #include <QtCore/QLocale>
 
+#include <ada.h>
+
 namespace {
 
 constexpr auto kReminderSetToastDuration = 4 * crl::time(1000);
+
+// QUrl keeps punycode for hosts outside its IDN whitelist.
+[[nodiscard]] QString DisplayUrlWithUnicodeHost(const QUrl &url) {
+	const auto result = url.toDisplayString();
+	const auto shown = url.host();
+	const auto ace = url.host(QUrl::FullyEncoded).toStdString();
+	const auto unicode = ada::idna::to_unicode(ace);
+	const auto host = QString::fromStdString(unicode);
+	if (host == shown || ada::idna::to_ascii(unicode) != ace) {
+		return result;
+	}
+	const auto authority = result.indexOf(u"://"_q);
+	const auto from = (authority < 0)
+		? -1
+		: url.userName().isEmpty()
+		? (authority + 3)
+		: (result.indexOf('@', authority + 3) + 1);
+	return (from > 0 && result.mid(from, shown.size()) == shown)
+		? QString(result).replace(from, shown.size(), host)
+		: result;
+}
+
+[[nodiscard]] bool IsVisibleCodePoint(uint ch) {
+	return QChar::isPrint(ch) && !QChar::isMark(ch) && !QChar::isSpace(ch);
+}
+
+[[nodiscard]] TextWithEntities HighlightSuspicious(
+		const QString &url,
+		const std::vector<UrlClickHandler::SuspiciousRange> &suspicious) {
+	auto result = TextWithEntities();
+	auto from = 0;
+	for (const auto &range : suspicious) {
+		result.append(url.mid(from, range.from - from));
+		result.append(tr::bold(Ui::Text::Colorized(
+			url.mid(range.from, range.length),
+			1)));
+		from = range.from + range.length;
+	}
+	result.append(url.mid(from));
+	return result;
+}
 
 [[nodiscard]] TextWithEntities BoldDomainInUrl(const QString &url) {
 	auto result = TextWithEntities{ .text = url };
@@ -85,6 +129,75 @@ constexpr auto kReminderSetToastDuration = 4 * crl::time(1000);
 
 [[nodiscard]] bool HiddenUrlRequiresConfirmation(const QUrl &url) {
 	return UrlRequiresConfirmation(url) || IsTelegramShortLinkHost(url);
+}
+
+[[nodiscard]] bool IsWebAuthTokenPart(QStringView part) {
+	// Only the parameter name counts, a value may mention it freely.
+	// The name is compared with its percent-encoding undone, however deep.
+	auto name = part.left(part.indexOf('=')).toString();
+	for (auto i = 0; i != 4; ++i) {
+		const auto once = QUrl::fromPercentEncoding(name.toUtf8());
+		if (once == name) {
+			break;
+		}
+		name = once;
+	}
+	// WHY: URLSearchParams drops a leading "?", so "#??tgWebAuthToken="
+	// still hands the token to the web client.
+	while (name.startsWith('?')) {
+		name.remove(0, 1);
+	}
+	// Any tgWebAuth* parameter only describes the foreign login.
+	return name.startsWith(u"tgWebAuth"_q, Qt::CaseInsensitive)
+		|| !name.compare(u"autologin_token"_q, Qt::CaseInsensitive);
+}
+
+// Removes the token parameters from "a=b&c=d", splitting only on "&" the
+// way URLSearchParams does, so that a "?" stays inside the value it is in.
+[[nodiscard]] std::optional<QString> WithoutWebAuthTokenParams(
+		QStringView encoded) {
+	auto result = QString();
+	auto removed = false;
+	auto first = true;
+	for (const auto part : encoded.split('&')) {
+		if (IsWebAuthTokenPart(part)) {
+			removed = true;
+			continue;
+		} else if (!first) {
+			result.append('&');
+		}
+		first = false;
+		result.append(part);
+	}
+	return removed ? std::make_optional(result) : std::nullopt;
+}
+
+// A fragment may hold a route before its parameters, as in "#/k/?a=b",
+// or hold the parameters right away, as in "#a=b", so both are cleaned.
+[[nodiscard]] std::optional<QString> WithoutWebAuthTokenFragmentParams(
+		const QString &encoded) {
+	const auto question = encoded.indexOf('?');
+	if (question < 0) {
+		return WithoutWebAuthTokenParams(encoded);
+	}
+	const auto routePart = QStringView(encoded).left(question);
+	const auto paramsPart = QStringView(encoded).mid(question + 1);
+	const auto route = WithoutWebAuthTokenParams(routePart);
+	const auto params = WithoutWebAuthTokenParams(paramsPart);
+	if (!route && !params) {
+		return std::nullopt;
+	}
+	auto result = route.value_or(routePart.toString());
+	const auto rest = params.value_or(paramsPart.toString());
+	if (!rest.isEmpty()) {
+		result.append('?').append(rest);
+	}
+	return result;
+}
+
+[[nodiscard]] bool RequiresConfirmationAfterIvFallback(const QUrl &url) {
+	const auto host = url.host().toLower();
+	return (host == u"telegra.ph"_q) || (host == u"te.legra.ph"_q);
 }
 
 // Possible context owners: media viewer, profile, history widget.
@@ -226,18 +339,65 @@ bool UrlRequiresConfirmation(const QUrl &url) {
 		RegExOption::CaseInsensitive);
 }
 
+QString UrlWithoutWebAuthTokens(const QString &url) {
+	auto parsed = QUrl(url);
+	const auto scheme = parsed.scheme().toLower();
+	if (!parsed.isValid()
+		|| (scheme != u"https"_q && scheme != u"http"_q)) {
+		return url;
+	}
+	auto host = parsed.host();
+	while (host.endsWith('.')) {
+		host.chop(1);
+	}
+	auto check = QUrl();
+	check.setHost(host);
+	if (host.isEmpty() || UrlRequiresConfirmation(check)) {
+		return url;
+	}
+	const auto query = WithoutWebAuthTokenParams(
+		parsed.query(QUrl::FullyEncoded));
+	const auto fragment = WithoutWebAuthTokenFragmentParams(
+		parsed.fragment(QUrl::FullyEncoded));
+	if (!query && !fragment) {
+		return url;
+	}
+	if (query) {
+		parsed.setQuery(
+			query->isEmpty() ? QString() : *query);
+	}
+	if (fragment) {
+		parsed.setFragment(
+			fragment->isEmpty() ? QString() : *fragment);
+	}
+	return QString::fromUtf8(parsed.toEncoded());
+}
+
 QString HiddenUrlClickHandler::copyToClipboardText() const {
-	return url().startsWith(u"internal:url:"_q)
-		? url().mid(u"internal:url:"_q.size())
-		: url();
+	const auto original = originalUrl();
+	const auto originalExternal = UrlClickHandler::ExternalUrlFromInternalUrl(
+		original);
+	if (!originalExternal.isEmpty()) {
+		return originalExternal;
+	}
+	const auto value = url();
+	const auto external = UrlClickHandler::ExternalUrlFromInternalUrl(value);
+	return external.isEmpty() ? value : external;
 }
 
 QString HiddenUrlClickHandler::copyToClipboardContextItemText() const {
-	return url().isEmpty()
+	const auto original = originalUrl();
+	const auto originalExternal = UrlClickHandler::ExternalUrlFromInternalUrl(
+		original);
+	const auto value = originalExternal.isEmpty() ? url() : original;
+	const auto external = originalExternal.isEmpty()
+		? UrlClickHandler::ExternalUrlFromInternalUrl(value)
+		: originalExternal;
+	return value.isEmpty()
 		? QString()
-		: !url().startsWith(u"internal:"_q)
+		: !value.startsWith(u"internal:"_q)
 		? UrlClickHandler::copyToClipboardContextItemText()
-		: url().startsWith(u"internal:url:"_q)
+		: !external.isEmpty()
 		? UrlClickHandler::copyToClipboardContextItemText()
 		: QString();
 }
@@ -248,14 +408,15 @@ QString HiddenUrlClickHandler::dragText() const {
 }
 
 void HiddenUrlClickHandler::Open(QString url, QVariant context) {
+	if (const auto external = UrlClickHandler::ExternalUrlFromInternalUrl(url);
+			!external.isEmpty()) {
+		url = external;
+	}
 	url = Core::TryConvertUrlToLocal(url);
 	if (Core::InternalPassportOrOAuthLink(url)) {
 		return;
 	}
 
-	const auto open = [=] {
-		UrlClickHandler::Open(url, context);
-	};
 	if (url.startsWith(u"tg://"_q, Qt::CaseInsensitive)
 		|| url.startsWith(u"internal:"_q, Qt::CaseInsensitive)) {
 		UrlClickHandler::Open(url, QVariant::fromValue([&] {
@@ -267,20 +428,50 @@ void HiddenUrlClickHandler::Open(QString url, QVariant context) {
 		const auto parsedUrl = url.startsWith(u"tonsite://"_q)
 			? QUrl(url)
 			: QUrl::fromUserInput(url);
-		if (HiddenUrlRequiresConfirmation(parsedUrl)
-			&& !base::IsCtrlPressed()) {
-			const auto my = context.value<ClickHandlerContext>();
+		auto my = context.value<ClickHandlerContext>();
+		auto openContext = context;
+		const auto forceConfirmation = my.forceExternalUrlConfirmation
+			&& my.ignoreIv;
+		const auto skipConfirmation = base::IsCtrlPressed();
+		if (forceConfirmation) {
+			my.forceExternalUrlConfirmation = false;
+			openContext = QVariant::fromValue(my);
+		}
+		const auto confirmAfterIvFallback
+			= RequiresConfirmationAfterIvFallback(parsedUrl)
+			&& !my.ignoreIv
+			&& !skipConfirmation;
+		const auto canTryIv = (my.sessionWindow.get() != nullptr);
+		if (confirmAfterIvFallback && canTryIv) {
+			my.forceExternalUrlConfirmation = true;
+			openContext = QVariant::fromValue(my);
+		}
+		const auto open = [=] {
+			UrlClickHandler::Open(url, openContext);
+		};
+		if (forceConfirmation
+			|| (confirmAfterIvFallback && !canTryIv)
+			|| (HiddenUrlRequiresConfirmation(parsedUrl)
+				&& !skipConfirmation)) {
 			if (!my.show) {
 				Core::App().hideMediaView();
 			}
 			const auto displayed = parsedUrl.isValid()
-				? parsedUrl.toDisplayString()
+				? DisplayUrlWithUnicodeHost(parsedUrl)
 				: url;
-			const auto displayUrl = !IsSuspicious(displayed)
+			const auto suspicious = SuspiciousRanges(displayed);
+			const auto visible = ranges::all_of(suspicious, [&](
+					const SuspiciousRange &range) {
+				return ranges::all_of(
+					displayed.mid(range.from, range.length).toUcs4(),
+					IsVisibleCodePoint);
+			});
+			const auto displayUrl = visible
 				? displayed
 				: parsedUrl.isValid()
 				? QString::fromUtf8(parsedUrl.toEncoded())
 				: ShowEncoded(displayed);
+			const auto marked = visible && !suspicious.empty();
 			const auto controller = my.sessionWindow.get();
 			const auto use = controller
 				? &controller->window()
@@ -299,8 +490,19 @@ void HiddenUrlClickHandler::Open(QString url, QVariant context) {
 				const auto url = box->addRow(
 					object_ptr<Ui::FlatLabel>(
 						box,
-						rpl::single(BoldDomainInUrl(displayUrl)),
+						rpl::single(marked
+							? HighlightSuspicious(displayUrl, suspicious)
+							: BoldDomainInUrl(displayUrl)),
 						st));
+				if (marked) {
+					const auto colors = url->lifetime().make_state<
+						std::array<Ui::Text::SpecialColor, 1>>();
+					colors->front() = {
+						.pen = &st::attentionButtonFg->p,
+						.penSelected = &st::attentionButtonFg->p,
+					};
+					url->setColors(*colors);
+				}
 				url->setContextMenuHook([=](
 						Ui::FlatLabel::ContextMenuRequest request) {
 					const auto copyContextText = [=] {
@@ -332,6 +534,13 @@ void HiddenUrlClickHandler::Open(QString url, QVariant context) {
 				});
 				url->setSelectable(true);
 				url->setContextCopyText(tr::lng_context_copy_link(tr::now));
+				if (marked) {
+					box->addSkip(st.style.lineHeight);
+					box->addRow(object_ptr<Ui::FlatLabel>(
+						box,
+						tr::lng_open_link_suspicious_chars(),
+						st));
+				}
 			});
 			if (my.show) {
 				my.show->showBox(std::move(box));
@@ -371,6 +580,7 @@ void BotGameUrlClickHandler::onClick(ClickContext context) const {
 	const auto openGame = [=] {
 		bot->session().attachWebView().open({
 			.bot = bot,
+			.context = { .controller = weakController },
 			.button = {.url = url.toUtf8() },
 			.source = InlineBots::WebViewSourceGame{
 				.messageId = itemId,
@@ -402,7 +612,13 @@ void BotGameUrlClickHandler::onClick(ClickContext context) const {
 }
 
 auto HiddenUrlClickHandler::getTextEntity() const -> TextEntity {
-	return { EntityType::CustomUrl, url() };
+	const auto original = originalUrl();
+	return {
+		EntityType::CustomUrl,
+		UrlClickHandler::ExternalUrlFromInternalUrl(original).isEmpty()
+			? url()
+			: original
+	};
 }
 
 QString MentionClickHandler::copyToClipboardContextItemText() const {
@@ -542,7 +758,11 @@ void MonospaceClickHandler::onClick(ClickContext context) const {
 	}
 	const auto my = context.other.value<ClickHandlerContext>();
 	if (const auto controller = my.sessionWindow.get()) {
-		controller->showToast(tr::lng_text_copied(tr::now));
+		controller->showToast({
+			.text = { tr::lng_text_copied(tr::now) },
+			.iconLottie = u"toast/copy"_q,
+			.iconLottieSize = st::toastLottieIconSize,
+		});
 	}
 	TextUtilities::SetClipboardText(TextForMimeData::Simple(_text.trimmed()));
 }
@@ -585,7 +805,11 @@ void FormattedDateClickHandler::onClick(ClickContext context) const {
 				base::unixtime::parse(date),
 				QLocale::LongFormat);
 			TextUtilities::SetClipboardText(TextForMimeData::Simple(text));
-			show->showToast(tr::lng_date_copied(tr::now));
+			show->showToast({
+				.text = { tr::lng_date_copied(tr::now) },
+				.iconLottie = u"toast/copy"_q,
+				.iconLottieSize = st::toastLottieIconSize,
+			});
 		},
 		&st::menuIconCopy);
 
@@ -605,7 +829,7 @@ void FormattedDateClickHandler::onClick(ClickContext context) const {
 	if (canForward) {
 		menu->addAction(
 			tr::lng_context_set_reminder(tr::now),
-			[itemId, show] {
+			[date, itemId, show] {
 				const auto session = &show->session();
 				const auto item = session->data().message(itemId);
 				if (!item) {
@@ -613,6 +837,10 @@ void FormattedDateClickHandler::onClick(ClickContext context) const {
 				}
 				const auto self = session->user();
 				const auto history = self->owner().history(self);
+				const auto now = base::unixtime::now();
+				const auto scheduleTime = (date > now + 60)
+					? date
+					: HistoryView::DefaultScheduleTime();
 				show->showBox(HistoryView::PrepareScheduleBox(
 					session,
 					show,
@@ -627,7 +855,9 @@ void FormattedDateClickHandler::onClick(ClickContext context) const {
 							},
 							action,
 							[=] { DoneSetReminder(show); });
-					}));
+					},
+					Api::SendOptions(),
+					scheduleTime));
 			},
 			&st::menuIconNotifications);
 	}

@@ -203,11 +203,13 @@ InnerWidget::InnerWidget(
 	QWidget *parent,
 	not_null<Controller*> controller,
 	rpl::producer<int> albumId,
-	int addingToAlbumId)
+	int addingToAlbumId,
+	bool myProfile)
 : RpWidget(parent)
 , _controller(controller)
 , _peer(controller->key().storiesPeer())
 , _addingToAlbumId(addingToAlbumId)
+, _myProfile(myProfile)
 , _albumId(std::move(albumId))
 , _albumChanges(Data::StoryAlbumUpdate{
 	.peer = _peer,
@@ -275,7 +277,7 @@ void InnerWidget::setupTop() {
 		return;
 	} else if (albumId == Data::kStoriesAlbumIdArchive) {
 		createAboutArchive();
-	} else if (_isStackBottom) {
+	} else if (_isStackBottom || _myProfile) {
 		if (_peer->isSelf()) {
 			createProfileTop();
 		} else if (_peer->owner().stories().hasArchive(_peer)) {
@@ -308,17 +310,13 @@ void InnerWidget::createProfileTop() {
 		_topBarColor.value());
 
 	using namespace Profile;
-	auto mainTracker = Ui::MultiSlideTracker();
-	auto dividerOverridden = rpl::variable<bool>(false);
 	AddDetails(
 		_top,
 		_controller,
 		_peer,
 		nullptr,
 		nullptr,
-		{ v::null },
-		mainTracker,
-		dividerOverridden);
+		{ v::null });
 
 	auto tracker = Ui::MultiSlideTracker();
 	const auto dividerWrap = _top->add(

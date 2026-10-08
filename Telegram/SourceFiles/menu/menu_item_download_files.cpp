@@ -30,6 +30,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/popup_menu.h"
 #include "window/window_session_controller.h"
 #include "window/window_controller.h"
+#include "styles/style_chat_helpers.h"
 #include "styles/style_menu_icons.h"
 #include "styles/style_widgets.h"
 
@@ -39,19 +40,21 @@ namespace {
 using Documents = std::vector<std::pair<not_null<DocumentData*>, FullMsgId>>;
 using Photos = std::vector<std::pair<not_null<PhotoData*>, FullMsgId>>;
 
-[[nodiscard]] bool Added(
+[[nodiscard]] bool Collected(
 		HistoryItem *item,
 		Documents &documents,
 		Photos &photos) {
-	if (item && !item->forbidsForward()) {
-		if (const auto media = item->media()) {
-			if (const auto photo = media->photo()) {
-				photos.emplace_back(photo, item->fullId());
-				return true;
-			} else if (const auto document = media->document()) {
-				documents.emplace_back(document, item->fullId());
-				return true;
-			}
+	if (!item) {
+		return false;
+	} else if (item->forbidsSaving()) {
+		return true;
+	} else if (const auto media = item->media()) {
+		if (const auto photo = media->photo()) {
+			photos.emplace_back(photo, item->fullId());
+			return true;
+		} else if (const auto document = media->document()) {
+			documents.emplace_back(document, item->fullId());
+			return true;
 		}
 	}
 	return false;
@@ -109,6 +112,8 @@ void AddAction(
 							"internal:show_saved_message"),
 						tr::marked),
 					.filter = filter,
+					.iconLottie = u"toast/save_to_gallery"_q,
+					.iconLottieSize = st::toastLottieIconSize,
 					.st = &st::defaultToast,
 				});
 			};
@@ -243,9 +248,12 @@ void AddDownloadFilesAction(
 		const auto &id = selectedItem.msgId;
 		const auto item = window->session().data().message(id);
 
-		if (!Added(item, docs, photos)) {
+		if (!Collected(item, docs, photos)) {
 			return;
 		}
+	}
+	if (docs.empty() && photos.empty()) {
+		return;
 	}
 	const auto done = [weak = base::make_weak(list)] {
 		if (const auto strong = weak.get()) {
@@ -258,21 +266,20 @@ void AddDownloadFilesAction(
 void AddDownloadFilesAction(
 		not_null<Ui::PopupMenu*> menu,
 		not_null<Window::SessionController*> window,
-		const base::flat_map<HistoryItem*, TextSelection, std::less<>> &items,
+		const std::vector<not_null<HistoryItem*>> &items,
 		not_null<HistoryInner*> list) {
 	if (items.empty()) {
 		return;
 	}
-	auto sortedItems = ranges::views::all(items)
-		| ranges::views::keys
-		| ranges::to<std::vector>();
-	ranges::sort(sortedItems, {}, &HistoryItem::fullId);
 	auto docs = Documents();
 	auto photos = Photos();
-	for (const auto &item : sortedItems) {
-		if (!Added(item, docs, photos)) {
+	for (const auto &item : items) {
+		if (!Collected(item, docs, photos)) {
 			return;
 		}
+	}
+	if (docs.empty() && photos.empty()) {
+		return;
 	}
 	const auto done = [weak = base::make_weak(list)] {
 		if (const auto strong = weak.get()) {

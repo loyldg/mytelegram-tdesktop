@@ -11,8 +11,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "platform/platform_specific.h"
 #include "core/application.h"
 #include "core/ui_integration.h"
+#include "chat_helpers/emoji_suggestions_widget.h"
 #include "chat_helpers/message_field.h"
 #include "lang/lang_keys.h"
+#include "base/qt_signal_producer.h"
 #include "ui/widgets/buttons.h"
 #include "ui/widgets/fields/input_field.h"
 #include "ui/platform/ui_platform_utility.h"
@@ -23,6 +25,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/painter.h"
 #include "ui/power_saving.h"
 #include "ui/ui_utility.h"
+#include "data/data_premium_limits.h"
 #include "data/data_saved_sublist.h"
 #include "data/data_session.h"
 #include "data/data_forum_topic.h"
@@ -79,6 +82,16 @@ Manager::Manager(System *system)
 	) | rpl::on_next([=](ChangeType change) {
 		settingsChanged(change);
 	}, _lifetime);
+
+	// Notifications are kept in the queue while there are no screens.
+	base::qt_signal_producer(
+		qApp,
+		&QGuiApplication::screenAdded
+	) | rpl::filter([=] {
+		return !_queuedNotifications.empty();
+	}) | rpl::on_next([=] {
+		showNextFromQueue();
+	}, _lifetime);
 }
 
 Manager::QueuedNotification::QueuedNotification(NotificationFields &&fields)
@@ -133,7 +146,7 @@ void Manager::settingsChanged(ChangeType change) {
 	} else if (change == ChangeType::MaxCount) {
 		int allow = Core::App().settings().notificationsCount();
 		for (int i = _notifications.size(); i != 0;) {
-			auto &notification = _notifications[--i];
+			const auto &notification = _notifications[--i];
 			if (notification->isUnlinked()) continue;
 			if (--allow < 0) {
 				notification->unlinkHistory();
@@ -205,6 +218,10 @@ void Manager::stopAllHiding() {
 }
 
 void Manager::showNextFromQueue() {
+	if (!QGuiApplication::primaryScreen()) {
+		// Creating a window without screens is a Qt fatal error.
+		return;
+	}
 	auto guard = gsl::finally([this] {
 		if (_positionsOutdated) {
 			moveWidgets();
@@ -283,7 +300,7 @@ void Manager::moveWidgets() {
 	auto shift = st::notifyDeltaY;
 	int lastShift = 0, lastShiftCurrent = 0, count = 0;
 	for (int i = _notifications.size(); i != 0;) {
-		auto &notification = _notifications[--i];
+		const auto &notification = _notifications[--i];
 		if (notification->isUnlinked()) continue;
 
 		notification->changeShift(shift);
@@ -611,7 +628,7 @@ void Widget::moveByShift() {
 }
 
 QPoint Widget::computePosition(int height) const {
-	auto realShift = qRound(_shift.current());
+	auto realShift = int(base::SafeRound(_shift.current()));
 	if (_direction == Direction::Up) {
 		realShift = -realShift - height;
 	}
@@ -1115,12 +1132,26 @@ void Notification::showReplyField() {
 	_replyArea->moveToLeft(st::notifyBorderWidth, st::notifyMinHeight);
 	_replyArea->show();
 	_replyArea->setFocus();
-	_replyArea->setMaxLength(MaxMessageSize);
+	_replyArea->setMaxLength(
+		Data::PremiumLimits(&_item->history()->session()).messageLengthCurrent());
 	_replyArea->setSubmitSettings(Ui::InputField::SubmitSettings::Both);
+	const auto session = &_item->history()->session();
 	InitMessageFieldHandlers({
-		.session = &_item->history()->session(),
+		.session = session,
 		.field = _replyArea.data(),
 	});
+	const auto peer = _item->history()->peer;
+	Ui::Emoji::SuggestionsController::Init(
+		this,
+		_replyArea.data(),
+		session,
+		{
+			.suggestCustomEmoji = true,
+			.allowCustomWithoutPremium = [=](
+					not_null<DocumentData*> emoji) {
+				return Data::AllowEmojiWithoutPremium(peer, emoji);
+			},
+		});
 
 	// Catch mouse press event to activate the window.
 	QCoreApplication::instance()->installEventFilter(this);
@@ -1191,8 +1222,17 @@ bool Notification::unlinkHistory(
 bool Notification::unlinkSession(not_null<Main::Session*> session) {
 	const auto unlink = _history && (&_history->session() == session);
 	if (unlink) {
+		// Custom emoji in title and text caches are owned by the session,
+		// while the widget outlives it for the hide animation, so caches
+		// must be destroyed right here. The already rendered _cache image
+		// is still painted, so don't re-render it from the empty strings.
+		_titleCache = Ui::Text::String();
+		_textCache = Ui::Text::String();
+		_textsRepaintScheduled = false;
 		hideFast();
 		_history = nullptr;
+		_topic = nullptr;
+		_sublist = nullptr;
 		_item = nullptr;
 	}
 	return unlink;

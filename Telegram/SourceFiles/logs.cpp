@@ -10,6 +10,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "platform/platform_specific.h"
 #include "core/crash_reports.h"
 #include "core/launcher.h"
+#include "core/update_channel.h"
+#include "core/version.h"
 #include "mtproto/facade.h"
 
 namespace {
@@ -277,7 +279,7 @@ void _logsWrite(LogDataType type, const QString &msg) {
 		if (!LogsInMemory) {
 			LogsInMemory = new LogsInMemoryList;
 		}
-		LogsInMemory->push_back(qMakePair(type, msg));
+		LogsInMemory->push_back({ type, msg });
 	} else if (!LogsBeforeSingleInstanceChecked.isEmpty() && type == LogDataMain) {
 		LogsBeforeSingleInstanceChecked += msg;
 	}
@@ -391,10 +393,13 @@ void start() {
 		LogsData = nullptr;
 	}
 
-	LOG(("Launched version: %1, install beta: %2, alpha: %3, debug mode: %4"
+	const auto canary = Core::BuildIsCanary
+		? u", canary: #%1"_q.arg(Core::CanaryBuildCounter)
+		: QString();
+	LOG(("Launched version: %1, install beta: %2%3, debug mode: %4"
 		).arg(AppVersion
 		).arg(Logs::b(cInstallBetaVersion())
-		).arg(cAlphaVersion()
+		).arg(canary
 		).arg(Logs::b(DebugEnabled())));
 	LOG(("Executable dir: %1, name: %2").arg(cExeDir(), cExeName()));
 	LOG(("Initial working dir: %1").arg(launcher.initialWorkingDir()));

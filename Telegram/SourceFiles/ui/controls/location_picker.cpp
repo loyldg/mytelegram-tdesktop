@@ -11,6 +11,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/platform/base_platform_info.h"
 #include "boxes/peer_list_box.h"
 #include "core/current_geo_location.h"
+#include "core/file_utilities.h"
 #include "data/data_document.h"
 #include "data/data_document_media.h"
 #include "data/data_file_origin.h"
@@ -24,12 +25,15 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/session/session_show.h"
 #include "main/main_session.h"
 #include "mtproto/mtproto_config.h"
+#include "ui/chat/attach/attach_bot_webview.h"
 #include "ui/effects/radial_animation.h"
 #include "ui/text/text_utilities.h"
+#include "ui/widgets/labels.h"
 #include "ui/widgets/scroll_area.h"
 #include "ui/widgets/separate_panel.h"
 #include "ui/widgets/shadow.h"
 #include "ui/widgets/buttons.h"
+#include "ui/wrap/padding_wrap.h"
 #include "ui/wrap/slide_wrap.h"
 #include "ui/wrap/vertical_layout.h"
 #include "ui/painter.h"
@@ -40,11 +44,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "webview/webview_interface.h"
 #include "core/cached_webview_availability.h"
 #include "window/themes/window_theme.h"
-#include "styles/style_chat_helpers.h"
 #include "styles/style_dialogs.h"
-#include "styles/style_window.h"
+#include "styles/style_location_picker.h"
+#include "styles/style_payments.h" // paymentsCriticalError
 #include "styles/style_settings.h" // settingsCloudPasswordIconSize
-#include "styles/style_layers.h" // boxDividerHeight
 
 #include <QtCore/QFile>
 #include <QtCore/QJsonDocument>
@@ -760,6 +763,10 @@ LocationPicker::LocationPicker(Descriptor &&descriptor)
 	std::move(
 		descriptor.closeRequests
 	) | rpl::on_next([=] {
+		// Close the webview before the panel: destroying the widget tree
+		// calls DestroyWindow() on the HWND the WebView2 controller is
+		// still attached to, which re-enters the window procedure.
+		base::take(_webview);
 		_window = nullptr;
 		delete this;
 	}, _lifetime);
@@ -882,6 +889,26 @@ void LocationPicker::setupWebview() {
 
 	delete base::take(_mapPlaceholder);
 
+	const auto window = _window.get();
+	_webview = std::make_unique<Webview::Window>(
+		_container,
+		Webview::WindowConfig{
+			.opaqueBg = st::windowBg->c,
+			.storageId = _webviewStorageId,
+			.dataRequestRedirectHost = u"api.mapbox.com"_q,
+			.safe = true,
+		});
+	const auto raw = _webview.get();
+	if (!raw->widget()) {
+		_webview = nullptr;
+		showWebviewError();
+		return;
+	}
+
+	window->lifetime().add([=] {
+		_webview = nullptr;
+	});
+
 	const auto mapControls = _mapControlsWrap->entity();
 	mapControls->insert(
 		1,
@@ -912,20 +939,6 @@ void LocationPicker::setupWebview() {
 	SetupLoadingView(_mapLoading);
 	_mapLoading->show();
 
-	const auto window = _window.get();
-	_webview = std::make_unique<Webview::Window>(
-		_container,
-		Webview::WindowConfig{
-			.opaqueBg = st::windowBg->c,
-			.storageId = _webviewStorageId,
-			.safe = true,
-		});
-	const auto raw = _webview.get();
-
-	window->lifetime().add([=] {
-		_webview = nullptr;
-	});
-
 	window->events(
 	) | rpl::on_next([=](not_null<QEvent*> e) {
 		if (e->type() == QEvent::Close) {
@@ -944,7 +957,7 @@ void LocationPicker::setupWebview() {
 		raw->widget()->setGeometry(QRect(QPoint(), size));
 	}, _container->lifetime());
 
-	raw->setNavigationStartHandler([=](const QString &uri, bool newWindow) {
+	raw->setNavigationPolicyHandler([=](const QString &uri, bool newWindow) {
 		return true;
 	});
 	raw->setNavigationDoneHandler([=](bool success) {
@@ -1057,6 +1070,45 @@ void LocationPicker::setupWebview() {
 	raw->navigateToData("location/picker.html");
 }
 
+void LocationPicker::showWebviewError() {
+	delete base::take(_mapPlaceholder);
+
+	const auto wrap = CreateChild<RpWidget>(_container);
+
+	const auto available = Webview::Availability();
+	auto text = (available.error != Webview::Available::Error::None)
+		? BotWebView::ErrorText(available)
+		: TextWithEntities{ u"Error: Could not initialize WebView."_q };
+
+	const auto error = CreateChild<PaddingWrap<FlatLabel>>(
+		wrap,
+		object_ptr<FlatLabel>(
+			wrap,
+			rpl::single(std::move(text)),
+			st::paymentsCriticalError),
+		st::paymentsCriticalErrorPadding);
+	error->entity()->setClickHandlerFilter([=](
+			const ClickHandlerPtr &handler,
+			Qt::MouseButton) {
+		const auto entity = handler->getTextEntity();
+		if (entity.type != EntityType::CustomUrl) {
+			return true;
+		}
+		File::OpenUrl(entity.data);
+		return false;
+	});
+	wrap->show();
+
+	wrap->widthValue() | rpl::on_next([=](int width) {
+		error->resizeToWidth(width);
+		wrap->resize(width, error->height());
+	}, wrap->lifetime());
+
+	_container->sizeValue() | rpl::on_next([=](QSize size) {
+		wrap->setGeometry(0, 0, size.width(), size.height());
+	}, wrap->lifetime());
+}
+
 void LocationPicker::resolveAddressByTimer() {
 	if (const auto location = base::take(_geocoderResolvePostponed)) {
 		resolveAddress(location);
@@ -1115,7 +1167,7 @@ bool LocationPicker::venuesFromCache(
 		Core::GeoLocation location,
 		QString query) {
 	const auto normalized = NormalizeVenuesQuery(query);
-	auto &cache = _venuesCache[normalized];
+	const auto &cache = _venuesCache[normalized];
 	const auto i = ranges::find_if(cache, [&](const VenuesCacheEntry &v) {
 		return AreTheSame(v.location, location);
 	});
@@ -1154,7 +1206,7 @@ void LocationPicker::venuesRequest(
 		MTP_string(username),
 		MTP_string()
 	)).done([=](const MTPcontacts_ResolvedPeer &result) {
-		auto &data = result.data();
+		const auto &data = result.data();
 		_session->data().processUsers(data.vusers());
 		_session->data().processChats(data.vchats());
 		const auto peer = _session->data().peerLoaded(
@@ -1301,6 +1353,10 @@ void LocationPicker::activate() {
 
 void LocationPicker::close() {
 	crl::on_main(this, [=] {
+		// Close the webview before the panel: destroying the widget tree
+		// calls DestroyWindow() on the HWND the WebView2 controller is
+		// still attached to, which re-enters the window procedure.
+		base::take(_webview);
 		_window = nullptr;
 		delete this;
 	});

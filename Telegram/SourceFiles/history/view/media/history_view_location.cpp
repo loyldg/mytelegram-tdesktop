@@ -13,6 +13,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/history_item.h"
 #include "history/history_location_manager.h"
 #include "history/view/history_view_element.h"
+#include "history/view/history_view_message.h"
 #include "history/view/history_view_cursor_state.h"
 #include "lang/lang_keys.h"
 #include "ui/chat/chat_style.h"
@@ -33,6 +34,10 @@ namespace {
 
 constexpr auto kUntilOffPeriod = std::numeric_limits<TimeId>::max();
 constexpr auto kLiveElapsedPartOpacity = 0.2;
+
+[[nodiscard]] bool IsHostedInstantViewMedia(not_null<const Element*> parent) {
+	return parent->Get<InstantViewMediaRuntime>() != nullptr;
+}
 
 [[nodiscard]] TimeId ResolveUpdateDate(not_null<Element*> view) {
 	const auto item = view->data();
@@ -93,13 +98,15 @@ Location::Location(
 	not_null<Data::CloudImage*> data,
 	Data::LocationPoint point,
 	Element *replacing,
-	TimeId livePeriod)
+	TimeId livePeriod,
+	QSize sizeOverride)
 : Media(parent)
 , _data(data)
 , _live(CreateLiveTracker(parent, livePeriod))
 , _title(st::msgMinWidth)
 , _description(st::msgMinWidth)
 , _link(std::make_shared<LocationClickHandler>(point))
+, _sizeOverride(sizeOverride)
 , _liveLocation(livePeriod > 0) {
 	if (_live) {
 		_title.setText(
@@ -287,25 +294,36 @@ void Location::ensureUserpicCreated() const {
 }
 
 QSize Location::countOptimalSize() {
+	const auto hostedInstantView = IsHostedInstantViewMedia(_parent);
 	auto tw = fullWidth();
 	auto th = fullHeight();
-	if (tw > st::maxMediaSize) {
+	if (!hostedInstantView && tw > st::maxMediaSize) {
 		th = (st::maxMediaSize * th) / tw;
 		tw = st::maxMediaSize;
 	}
-	auto minWidth = std::clamp(
-		_parent->minWidthForMedia(),
-		st::minPhotoSize,
-		st::maxMediaSize);
-	auto maxWidth = qMax(tw, minWidth);
-	auto minHeight = qMax(th, st::minPhotoSize);
+	auto minWidth = hostedInstantView
+		? std::max(_parent->minWidthForMedia(), 1)
+		: std::clamp(
+			_parent->minWidthForMedia(),
+			st::minPhotoSize,
+			st::maxMediaSize);
+	auto maxWidth = std::max(tw, minWidth);
+	auto minHeight = std::max(th, st::minPhotoSize);
 
 	if (_parent->hasBubble()) {
 		if (!_title.isEmpty()) {
-			minHeight += qMin(_title.countHeight(maxWidth - st::msgPadding.left() - st::msgPadding.right()), 2 * st::webPageTitleFont->height);
+			minHeight += std::min(
+				_title.countHeight(maxWidth
+					- st::msgPadding.left()
+					- st::msgPadding.right()),
+				2 * st::webPageTitleFont->height);
 		}
 		if (!_description.isEmpty()) {
-			minHeight += qMin(_description.countHeight(maxWidth - st::msgPadding.left() - st::msgPadding.right()), 3 * st::webPageDescriptionFont->height);
+			minHeight += std::min(
+				_description.countHeight(maxWidth
+					- st::msgPadding.left()
+					- st::msgPadding.right()),
+				3 * st::webPageDescriptionFont->height);
 		}
 		if (!_title.isEmpty() || !_description.isEmpty()) {
 			minHeight += st::mediaInBubbleSkip;
@@ -320,9 +338,10 @@ QSize Location::countOptimalSize() {
 QSize Location::countCurrentSize(int newWidth) {
 	accumulate_min(newWidth, maxWidth());
 
+	const auto hostedInstantView = IsHostedInstantViewMedia(_parent);
 	auto tw = fullWidth();
 	auto th = fullHeight();
-	if (tw > st::maxMediaSize) {
+	if (!hostedInstantView && tw > st::maxMediaSize) {
 		th = (st::maxMediaSize * th) / tw;
 		tw = st::maxMediaSize;
 	}
@@ -332,10 +351,12 @@ QSize Location::countCurrentSize(int newWidth) {
 	} else {
 		newWidth = tw;
 	}
-	auto minWidth = std::clamp(
-		_parent->minWidthForMedia(),
-		st::minPhotoSize,
-		std::min(newWidth, st::maxMediaSize));
+	auto minWidth = hostedInstantView
+		? std::max(_parent->minWidthForMedia(), 1)
+		: std::clamp(
+			_parent->minWidthForMedia(),
+			st::minPhotoSize,
+			std::min(newWidth, st::maxMediaSize));
 	accumulate_max(newWidth, minWidth);
 	accumulate_max(newHeight, st::minPhotoSize);
 	_thumbnailHeight = newHeight;
@@ -344,10 +365,18 @@ QSize Location::countCurrentSize(int newWidth) {
 	}
 	if (_parent->hasBubble()) {
 		if (!_title.isEmpty()) {
-			newHeight += qMin(_title.countHeight(newWidth - st::msgPadding.left() - st::msgPadding.right()), st::webPageTitleFont->height * 2);
+			newHeight += std::min(
+				_title.countHeight(newWidth
+					- st::msgPadding.left()
+					- st::msgPadding.right()),
+				st::webPageTitleFont->height * 2);
 		}
 		if (!_description.isEmpty()) {
-			newHeight += qMin(_description.countHeight(newWidth - st::msgPadding.left() - st::msgPadding.right()), st::webPageDescriptionFont->height * 3);
+			newHeight += std::min(
+				_description.countHeight(newWidth
+					- st::msgPadding.left()
+					- st::msgPadding.right()),
+				st::webPageDescriptionFont->height * 3);
 		}
 		if (!_title.isEmpty() || !_description.isEmpty()) {
 			newHeight += st::mediaInBubbleSkip;
@@ -374,14 +403,14 @@ void Location::draw(Painter &p, const PaintContext &context) const {
 		return;
 	}
 	auto paintx = 0, painty = 0, paintw = width(), painth = height();
+	const auto hostedInstantView = IsHostedInstantViewMedia(_parent);
 	bool bubble = _parent->hasBubble();
 	const auto st = context.st;
 	const auto stm = context.messageStyle();
 
 	const auto hasText = !_title.isEmpty() || !_description.isEmpty();
-	const auto rounding = adjustedBubbleRounding(hasText
-		? RectPart::FullBottom
-		: RectPart());
+	const auto square = hasText ? RectPart::FullBottom : RectPart();
+	const auto rounding = adjustedBubbleRounding(square);
 	const auto paintText = [&] {
 		if (!hasText && !_live) {
 			return;
@@ -393,19 +422,23 @@ void Location::draw(Painter &p, const PaintContext &context) const {
 		p.setPen(stm->historyTextFg);
 		if (!_title.isEmpty()) {
 			_title.drawLeftElided(p, paintx + st::msgPadding.left(), painty, textw, width(), 2, style::al_left, 0, -1, 0, false, context.selection);
-			painty += qMin(_title.countHeight(textw), 2 * st::webPageTitleFont->height);
+			painty += std::min(
+				_title.countHeight(textw),
+				2 * st::webPageTitleFont->height);
 		}
 		if (!_description.isEmpty()) {
 			if (_live) {
 				p.setPen(stm->msgDateFg);
 			}
 			_description.drawLeftElided(p, paintx + st::msgPadding.left(), painty, textw, width(), 3, style::al_left, 0, -1, 0, false, toDescriptionSelection(context.selection));
-			painty += qMin(_description.countHeight(textw), 3 * st::webPageDescriptionFont->height);
+			painty += std::min(
+				_description.countHeight(textw),
+				3 * st::webPageDescriptionFont->height);
 		}
 	};
 	const auto thumbh = _thumbnailHeight;
 	auto rthumb = QRect(paintx, painty, paintw, thumbh);
-	if (!bubble) {
+	if (!bubble && !hostedInstantView) {
 		fillImageShadow(p, rthumb, rounding, context);
 	}
 
@@ -677,7 +710,9 @@ TextState Location::textState(QPoint point, StateRequest request) const {
 		auto textw = width() - st::msgPadding.left() - st::msgPadding.right();
 
 		if (!_title.isEmpty()) {
-			auto titleh = qMin(_title.countHeight(textw), 2 * st::webPageTitleFont->height);
+			auto titleh = std::min(
+				_title.countHeight(textw),
+				2 * st::webPageTitleFont->height);
 			if (point.y() >= painty && point.y() < painty + titleh) {
 				result = TextState(_parent, _title.getStateLeft(
 					point - QPoint(paintx + st::msgPadding.left(), painty),
@@ -691,7 +726,9 @@ TextState Location::textState(QPoint point, StateRequest request) const {
 			painty += titleh;
 		}
 		if (!_description.isEmpty()) {
-			auto descriptionh = qMin(_description.countHeight(textw), 3 * st::webPageDescriptionFont->height);
+			auto descriptionh = std::min(
+				_description.countHeight(textw),
+				3 * st::webPageDescriptionFont->height);
 			if (point.y() >= painty && point.y() < painty + descriptionh) {
 				result = TextState(_parent, _description.getStateLeft(
 					point - QPoint(paintx + st::msgPadding.left(), painty),
@@ -788,11 +825,15 @@ QPoint Location::resolveCustomInfoRightBottom() const {
 }
 
 int Location::fullWidth() const {
-	return st::locationSize.width();
+	return (_sizeOverride.width() > 0)
+		? _sizeOverride.width()
+		: st::locationSize.width();
 }
 
 int Location::fullHeight() const {
-	return st::locationSize.height();
+	return (_sizeOverride.height() > 0)
+		? _sizeOverride.height()
+		: st::locationSize.height();
 }
 
 } // namespace HistoryView

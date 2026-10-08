@@ -15,6 +15,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/click_handler_types.h"
 #include "countries/countries_instance.h"
 #include "main/main_session.h"
+#include "main/main_session_settings.h"
 #include "ui/wrap/slide_wrap.h"
 #include "ui/text/format_values.h" // Ui::FormatPhone
 #include "ui/text/text_utilities.h"
@@ -27,6 +28,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_message_reactions.h"
 #include "data/data_folder.h"
 #include "data/data_changes.h"
+#include "data/stickers/data_custom_emoji.h"
+#include "chat_helpers/stickers_emoji_pack.h"
 #include "data/data_channel.h"
 #include "data/data_chat.h"
 #include "data/data_user.h"
@@ -154,6 +157,29 @@ rpl::producer<TextWithEntities> PhoneOrHiddenValue(not_null<UserData*> user) {
 			return phone;
 		}
 	});
+}
+
+rpl::producer<TextWithEntities> PhoneWithSpoilerValue(
+		not_null<UserData*> user,
+		rpl::producer<TextWithEntities> phone) {
+	if (!user->isSelf()) {
+		return phone;
+	}
+	return rpl::combine(
+		std::move(phone),
+		user->session().settings().phoneNumberHiddenValue()
+	) | rpl::map([](const TextWithEntities &phone, bool hidden) {
+		return hidden
+			? Ui::Text::Wrapped(phone, EntityType::Spoiler)
+			: phone;
+	});
+}
+
+void CopyPhoneToClipboard(rpl::producer<TextWithEntities> phone) {
+	auto text = rpl::variable<TextWithEntities>(
+		std::move(phone)).current().text;
+	text.replace(' ', QString()).replace('-', QString());
+	TextUtilities::SetClipboardText({ text });
 }
 
 rpl::producer<TextWithEntities> UsernameValue(
@@ -340,6 +366,13 @@ rpl::producer<bool> IsContactValue(not_null<UserData*> user) {
 	) | rpl::map([=] {
 		return user->isContact();
 	});
+}
+
+bool CanReportBot(not_null<UserData*> user) {
+	return user->isBot()
+		&& !user->isSelf()
+		&& !user->isSupport()
+		&& !user->isVerifyCodes();
 }
 
 [[nodiscard]] rpl::producer<QString> InviteToChatButton(
@@ -732,6 +765,36 @@ rpl::producer<QString> BirthdayLabelText(
 			tr::lng_info_birthday_today_label(),
 			tr::lng_info_birthday_label());
 	}) | rpl::flatten_latest();
+}
+
+rpl::producer<TextWithEntities> BirthdayValueMarkedText(
+		not_null<UserData*> user,
+		rpl::producer<Data::Birthday> birthday) {
+	const auto session = &user->session();
+	const auto cake = Data::BirthdayCake();
+	const auto emoji = Ui::Emoji::Find(cake);
+	return rpl::combine(
+		BirthdayValueText(std::move(birthday)),
+		rpl::single(rpl::empty) | rpl::then(
+			session->emojiStickersPack().refreshed())
+	) | rpl::map([=](const QString &text, const auto &) {
+		auto result = TextWithEntities{ text };
+		const auto position = emoji ? text.indexOf(cake) : -1;
+		if (position < 0) {
+			return result;
+		}
+		const auto id = session->emojiStickersPack().standardEmojiDocument(
+			emoji);
+		if (id) {
+			result.entities.push_back({
+				EntityType::CustomEmoji,
+				int(position),
+				int(cake.size()),
+				Data::SerializeCustomEmojiId(id),
+			});
+		}
+		return result;
+	});
 }
 
 rpl::producer<QString> BirthdayValueText(

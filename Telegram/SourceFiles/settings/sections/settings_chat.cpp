@@ -12,6 +12,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/timer_rpl.h"
 #include "settings/settings_builder.h"
 #include "settings/sections/settings_advanced.h"
+#include "settings/sections/settings_local_storage.h"
 #include "settings/sections/settings_main.h"
 #include "settings/sections/settings_privacy_security.h"
 #include "settings/settings_experimental.h"
@@ -26,7 +27,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "boxes/background_box.h"
 #include "boxes/background_preview_box.h"
 #include "boxes/download_path_box.h"
-#include "boxes/local_storage_box.h"
 #include "dialogs/ui/dialogs_quick_action_context.h"
 #include "dialogs/dialogs_quick_action.h"
 #include "ui/boxes/choose_font_box.h"
@@ -190,6 +190,7 @@ ColorsPalette::Button::Button(
 , _colors(std::move(colors))
 , _selected(selected) {
 	_widget.show();
+	_widget.setIsListItem(true);
 	_widget.resize(st::settingsAccentColorSize, st::settingsAccentColorSize);
 	_widget.paintRequest(
 	) | rpl::on_next([=] {
@@ -540,9 +541,9 @@ int BackgroundRow::resizeGetHeight(int newWidth) {
 	auto linkLeft = st::settingsBackgroundThumb + st::settingsThumbSkip;
 	auto linkWidth = newWidth - linkLeft;
 	_chooseFromGallery->resizeToWidth(
-		qMin(linkWidth, _chooseFromGallery->naturalWidth()));
+		std::min(linkWidth, _chooseFromGallery->naturalWidth()));
 	_chooseFromFile->resizeToWidth(
-		qMin(linkWidth, _chooseFromFile->naturalWidth()));
+		std::min(linkWidth, _chooseFromFile->naturalWidth()));
 	_chooseFromGallery->moveToLeft(linkLeft, linkTop, newWidth);
 	linkTop += _chooseFromGallery->height() + st::settingsFromFileTop;
 	_chooseFromFile->moveToLeft(linkLeft, linkTop, newWidth);
@@ -1802,6 +1803,19 @@ void SetupMessages(
 		} });
 	}
 
+	const auto pullToNext = inner->add(
+		object_ptr<Ui::Checkbox>(
+			inner,
+			tr::lng_settings_pull_to_next_channel(tr::now),
+			Core::App().settings().pullToNextChannel(),
+			st::settingsCheckbox),
+		st::settingsCheckboxPadding);
+	pullToNext->checkedChanges(
+	) | rpl::on_next([=](bool checked) {
+		Core::App().settings().setPullToNextChannel(checked);
+		Core::App().saveSettingsDelayed();
+	}, inner->lifetime());
+
 	Ui::AddSkip(inner);
 }
 
@@ -1867,7 +1881,9 @@ void SetupLocalStorage(
 		tr::lng_settings_manage_local_storage(),
 		st::settingsButton,
 		{ &st::menuIconStorage }
-	)->addClickHandler([=] { LocalStorageBox::Show(controller); });
+	)->addClickHandler([=] {
+		controller->showSettings(LocalStorageId());
+	});
 }
 
 void SetupDataStorage(
@@ -2250,6 +2266,8 @@ void SetupChatListQuickAction(
 					? tr::lng_settings_quick_dialog_action_pin
 					: (value == Dialogs::Ui::QuickDialogAction::Read)
 					? tr::lng_settings_quick_dialog_action_read
+					: (value == Dialogs::Ui::QuickDialogAction::Delete)
+					? tr::lng_settings_quick_dialog_action_delete
 					: (value == Dialogs::Ui::QuickDialogAction::Archive)
 					? tr::lng_settings_quick_dialog_action_archive
 					: tr::lng_settings_quick_dialog_action_disabled)();
@@ -2452,7 +2470,7 @@ void SetupDefaultThemes(
 			IsSystemAccentColorSupported() && (type != Type(-1)),
 			anim::type::instant);
 	};
-	group->setChangedCallback([=](Type type) {
+	group->setChangedCallback([=, raw = group.get()](Type type) {
 		const auto scheme = ranges::find(
 			kSchemesList,
 			type,
@@ -2460,7 +2478,7 @@ void SetupDefaultThemes(
 		if (scheme != end(kSchemesList)) {
 			apply(*scheme);
 		} else {
-			group->setValue(chosen());
+			raw->setValue(chosen());
 		}
 	});
 	for (const auto &scheme : kSchemesList) {
@@ -2771,6 +2789,9 @@ void SetupThemeSettings(
 		std::move(label),
 		st::settingsButton,
 		{ &st::menuIconFont });
+	const auto themeLifetime = container->lifetime().make_state<
+		rpl::lifetime
+	>();
 	fontButton->setClickedCallback([=] {
 		const auto save = [=](QString chosen) {
 			*family = chosen;
@@ -2779,8 +2800,11 @@ void SetupThemeSettings(
 			Core::Restart();
 		};
 
+		// Not container->lifetime(): that outlives the box, so every tap
+		// left another dead background subscription behind in it.
+		themeLifetime->destroy();
 		const auto theme = std::shared_ptr<Ui::ChatTheme>(
-			Window::Theme::DefaultChatThemeOn(container->lifetime()));
+			Window::Theme::DefaultChatThemeOn(*themeLifetime));
 		const auto generateBg = [=] {
 			const auto size = st::boxWidth;
 			const auto ratio = style::DevicePixelRatio();

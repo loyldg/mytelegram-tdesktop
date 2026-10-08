@@ -51,8 +51,10 @@ enum class Notification;
 } // namespace Media::Clip
 
 namespace style {
+struct ComposeIcons;
 struct EmojiPan;
 struct FlatLabel;
+struct PopupMenu;
 } // namespace style
 
 namespace ChatHelpers {
@@ -102,6 +104,7 @@ public:
 		StickersListDescriptor &&descriptor);
 
 	rpl::producer<FileChosen> chosen() const;
+	[[nodiscard]] rpl::producer<> photoRequests() const;
 	rpl::producer<> scrollUpdated() const;
 	rpl::producer<TabbedSelector::Action> choosingUpdated() const;
 
@@ -115,6 +118,9 @@ public:
 
 	void afterShown() override;
 	void beforeHiding() override;
+	[[nodiscard]] bool canConsumeHorizontalScroll(
+		QPoint position,
+		int delta) override;
 
 	void refreshStickers();
 
@@ -227,6 +233,14 @@ private:
 			return !(*this == other);
 		}
 	};
+	struct OverPhotoButton {
+		inline bool operator==(OverPhotoButton other) const {
+			return true;
+		}
+		inline bool operator!=(OverPhotoButton other) const {
+			return !(*this == other);
+		}
+	};
 	using OverState = std::variant<
 		v::null_t,
 		OverSticker,
@@ -234,7 +248,8 @@ private:
 		OverButton,
 		OverSearchShortcut,
 		OverSearchBack,
-		OverGroupAdd>;
+		OverGroupAdd,
+		OverPhotoButton>;
 
 	struct SectionInfo {
 		int section = 0;
@@ -268,6 +283,8 @@ private:
 	void displaySet(uint64 setId);
 	void removeMegagroupSet(bool locally);
 	void removeSet(uint64 setId);
+	[[nodiscard]] base::unique_qptr<Ui::PopupMenu> fillSetContextMenu(
+		const Set &set);
 	void refreshMySets();
 	void refreshFeaturedSets();
 	void refreshSearchSets();
@@ -303,6 +320,9 @@ private:
 	void readVisibleFeatured(int visibleTop, int visibleBottom);
 
 	void paintStickers(Painter &p, QRect clip);
+	void paintPhotoButton(Painter &p, QRect clip);
+	[[nodiscard]] int photoRowHeight() const;
+	[[nodiscard]] QRect photoButtonRect() const;
 	void paintMegagroupEmptySet(Painter &p, int y, bool buttonSelected);
 	void paintSticker(
 		Painter &p,
@@ -487,6 +507,11 @@ private:
 	QRect _megagroupSetButtonRect;
 	std::unique_ptr<Ui::RippleAnimation> _megagroupSetButtonRipple;
 
+	Ui::RoundRect _photoButtonBg;
+	QString _photoButtonText;
+	int _photoButtonTextWidth = 0;
+	std::unique_ptr<Ui::RippleAnimation> _photoButtonRipple;
+
 	QString _addText;
 	int _addWidth;
 	QString _installedText;
@@ -525,6 +550,7 @@ private:
 	bool _searchLoading = false;
 
 	rpl::event_stream<FileChosen> _chosen;
+	rpl::event_stream<> _photoRequests;
 	rpl::event_stream<> _scrollUpdated;
 	rpl::event_stream<TabbedSelector::Action> _choosingUpdated;
 
@@ -534,5 +560,15 @@ private:
 	not_null<Main::Session*> session,
 	const style::FlatLabel &st,
 	uint64 setId);
+
+[[nodiscard]] base::unique_qptr<Ui::PopupMenu> FillStickerSetContextMenu(
+	not_null<QWidget*> parent,
+	std::shared_ptr<Show> show,
+	not_null<Data::StickersSet*> set,
+	not_null<LocalStickersManager*> localSetsManager,
+	Fn<void(uint64 setId)> remove,
+	Fn<void()> repaint,
+	const style::PopupMenu &menuSt,
+	const style::ComposeIcons &icons);
 
 } // namespace ChatHelpers

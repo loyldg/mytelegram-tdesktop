@@ -11,11 +11,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/runtime_composer.h"
 #include "base/flags.h"
 #include "base/weak_ptr.h"
+#include "iv/iv_rich_page.h"
 #include "ui/userpic_view.h"
 
 class History;
 class HistoryBlock;
 class HistoryItem;
+class UserData;
 struct HistoryMessageReply;
 struct PreparedServiceText;
 struct HistoryMessageReplyMarkup;
@@ -59,8 +61,10 @@ enum class PointState : char;
 enum class InfoDisplayType : char;
 struct StateRequest;
 struct TextState;
+struct MessageSelection;
 class Media;
 class Reply;
+struct HistoryMessageRichPage;
 
 enum class Context : char {
 	History,
@@ -74,6 +78,7 @@ enum class Context : char {
 	ShortcutMessages,
 	ScheduledTopic,
 	ChatPreview,
+	WelcomeMessages,
 };
 
 enum class OnlyEmojiAndSpaces : char {
@@ -121,10 +126,16 @@ public:
 		not_null<DocumentData*> document,
 		FullMsgId context,
 		bool showInMediaView = false) = 0;
+	virtual bool elementScrollToLocalY(
+		not_null<const Element*> view,
+		int localTop) = 0;
 	virtual void elementCancelUpload(const FullMsgId &context) = 0;
 	virtual void elementShowTooltip(
 		const TextWithEntities &text,
 		Fn<void()> hiddenCallback) = 0;
+	virtual void elementShowHiddenSenderTooltip(
+		FullMsgId itemId,
+		const TextWithEntities &text) = 0;
 	virtual bool elementAnimationsPaused() = 0;
 	virtual bool elementHideReply(not_null<const Element*> view) = 0;
 	virtual bool elementShownUnread(not_null<const Element*> view) = 0;
@@ -183,10 +194,16 @@ public:
 		not_null<DocumentData*> document,
 		FullMsgId context,
 		bool showInMediaView = false) override;
+	bool elementScrollToLocalY(
+		not_null<const Element*> view,
+		int localTop) override;
 	void elementCancelUpload(const FullMsgId &context) override;
 	void elementShowTooltip(
 		const TextWithEntities &text,
 		Fn<void()> hiddenCallback) override;
+	void elementShowHiddenSenderTooltip(
+		FullMsgId itemId,
+		const TextWithEntities &text) override;
 	bool elementHideReply(not_null<const Element*> view) override;
 	bool elementShownUnread(not_null<const Element*> view) override;
 	void elementSendBotCommand(
@@ -367,6 +384,15 @@ struct FakeBotAboutTop : RuntimeComponent<FakeBotAboutTop, Element> {
 	int height = 0;
 };
 
+struct EphemeralBadge : RuntimeComponent<EphemeralBadge, Element> {
+	void init(not_null<const Element*> view);
+
+	Ui::Text::String text;
+	UserData *receiver = nullptr;
+	int maxWidth = 0;
+	int height = 0;
+};
+
 struct PurchasedTag : RuntimeComponent<PurchasedTag, Element> {
 	Ui::Text::String text;
 };
@@ -435,6 +461,8 @@ public:
 	[[nodiscard]] Context context() const;
 	void refreshDataId();
 
+	[[nodiscard]] PeerData *displayFrom() const;
+
 	[[nodiscard]] uint8 colorIndex() const;
 	[[nodiscard]] auto colorCollectible() const
 		-> const std::shared_ptr<Ui::ColorCollectible> &;
@@ -467,6 +495,7 @@ public:
 
 	[[nodiscard]] bool isTopicRootReply() const;
 
+	[[nodiscard]] bool hidesBottomInfo() const;
 	[[nodiscard]] int skipBlockWidth() const;
 	[[nodiscard]] int skipBlockHeight() const;
 	[[nodiscard]] virtual int infoWidth() const;
@@ -521,6 +550,7 @@ public:
 
 	[[nodiscard]] bool displayForumThreadBar() const;
 	[[nodiscard]] bool isInOneBunchWithPrevious() const;
+	void refreshForumThreadBar(Element *previous, bool enabled);
 
 	virtual void draw(Painter &p, const PaintContext &context) const = 0;
 	[[nodiscard]] virtual PointState pointState(QPoint point) const = 0;
@@ -540,14 +570,32 @@ public:
 		int bottom,
 		QPoint point,
 		InfoDisplayType type) const;
+	[[nodiscard]] virtual MessageSelection selectionFromStates(
+		const TextState &anchor,
+		const TextState &current,
+		TextSelectType type) const;
 	virtual TextForMimeData selectedText(TextSelection selection) const = 0;
+	virtual TextForMimeData selectedText(
+		const MessageSelection &selection) const;
+	[[nodiscard]] Iv::RichPageBlocksSlice selectedRichBlocks(
+		const MessageSelection &selection) const;
 	virtual SelectedQuote selectedQuote(
 		TextSelection selection) const = 0;
+	virtual SelectedQuote selectedQuote(
+		const MessageSelection &selection) const;
 	virtual TextSelection selectionFromQuote(
 		const SelectedQuote &quote) const = 0;
 	[[nodiscard]] virtual TextSelection adjustSelection(
 		TextSelection selection,
 		TextSelectType type) const;
+	[[nodiscard]] virtual MessageSelection adjustSelection(
+		const MessageSelection &selection,
+		TextSelectType type) const;
+	[[nodiscard]] virtual TextSelection selectionForEdit(
+		const MessageSelection &selection) const;
+	[[nodiscard]] virtual bool selectionContains(
+		const MessageSelection &selection,
+		const TextState &state) const;
 
 	[[nodiscard]] static SelectedQuote FindSelectedQuote(
 		const Ui::Text::String &text,
@@ -638,7 +686,8 @@ public:
 	[[nodiscard]] HistoryBlock *block();
 	[[nodiscard]] const HistoryBlock *block() const;
 	void attachToBlock(not_null<HistoryBlock*> block, int index);
-	void removeFromBlock();
+	void removeFromBlock(
+		Data::ViewRemovalReason reason = Data::ViewRemovalReason::Removed);
 	void refreshInBlock();
 	void setIndexInBlock(int index);
 	[[nodiscard]] int indexInBlock() const;
@@ -692,7 +741,15 @@ public:
 		not_null<const Element*> view,
 		QRect countedGeometry = QRect());
 
-	virtual bool consumeHorizontalScroll(QPoint position, int delta) {
+	virtual bool consumeHorizontalScroll(
+			QPoint position,
+			int delta,
+			Qt::ScrollPhase phase) {
+		return false;
+	}
+	[[nodiscard]] virtual bool canConsumeHorizontalScroll(
+			QPoint position,
+			int delta) const {
 		return false;
 	}
 
@@ -722,9 +779,13 @@ protected:
 	virtual void refreshDataIdHook();
 
 	[[nodiscard]] const Ui::Text::String &text() const;
+	[[nodiscard]] HistoryMessageRichPage *richpage();
+	[[nodiscard]] const HistoryMessageRichPage *richpage() const;
+	[[nodiscard]] int richPageWidthFor(int textWidth) const;
 	[[nodiscard]] int textHeightFor(int textWidth) const;
 	[[nodiscard]] int textRealWidth() const { return _textRealWidth; }
 	void validateText();
+	void invalidateTextSizeCache();
 	void validateTextSkipBlock(bool has, int width, int height);
 	void validateInlineKeyboard(HistoryMessageReplyMarkup *markup);
 
@@ -752,6 +813,8 @@ private:
 	// HistoryView::Element::Flag::AttachedToPrevious.
 	void recountAttachToPreviousInBlocks();
 
+	void refreshEphemeralBadge();
+
 	[[nodiscard]] bool countIsTopicRootReply() const;
 
 	QSize countOptimalSize() final override;
@@ -763,7 +826,6 @@ private:
 	}
 
 	void refreshMedia(Element *replacing);
-	void invalidateTextSizeCache();
 	void setTextWithLinks(
 		const TextWithEntities &text,
 		const std::vector<ClickHandlerPtr> &links = {});
