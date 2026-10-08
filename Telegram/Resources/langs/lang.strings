@@ -3167,6 +3167,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_bot_allow_write_title" = "Allow messaging";
 "lng_bot_allow_write" = "Do you want to allow this bot to send you messages?";
 "lng_bot_allow_write_confirm" = "Allow";
+"lng_bot_allow_microphone" = "Do you want to allow this bot to use your microphone?";
+"lng_bot_allow_camera" = "Do you want to allow this bot to use your camera?";
+"lng_bot_allow_camera_microphone" = "Do you want to allow this bot to use your camera and microphone?";
+"lng_bot_allow_location" = "Do you want to allow this bot to access your location?";
+"lng_bot_allow_permission_confirm" = "Allow";
 "lng_bot_new_chat" = "New Chat";
 "lng_bot_new_thread_title" = "New Thread";
 "lng_bot_new_thread_about" = "Type any message to create a new thread.";
@@ -5192,6 +5197,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 "lng_open_this_link" = "Open this link?";
 "lng_open_link" = "Open";
+"lng_open_link_suspicious_chars" = "Highlighted characters are from a different alphabet than the rest of the address.";
 "lng_allow_bot_pass" = "Allow {bot_name} to pass your Telegram name and ID (not your phone number) to the web pages you open via this bot?";
 "lng_allow_bot" = "Allow";
 "lng_allow_bot_webview_details" = "More about this bot {emoji}";
@@ -8412,6 +8418,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_channel_earn_currency_history" = "TON Transactions";
 "lng_channel_earn_credits_history" = "Stars Transactions";
 "lng_channel_earn_out_check_password_about" = "You can withdraw only if you have:";
+"lng_channel_earn_out_amount_too_small" = "The amount is too small to withdraw.";
 
 "lng_bot_earn_title" = "Stars Balance";
 "lng_bot_earn_chart_revenue" = "Revenue";

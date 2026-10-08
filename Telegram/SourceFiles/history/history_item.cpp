@@ -2570,6 +2570,7 @@ void HistoryItem::applyEdition(const MTPDmessageService &message) {
 			reply->clearData(this);
 		}
 		clearDependencyMessage();
+		unarmMediaDestroy();
 		UpdateComponents(0);
 		createServiceFromMtp(message);
 		applyServiceDateEdition(message);
@@ -2603,6 +2604,7 @@ void HistoryItem::applyEdition(const MTPDmessageService &message) {
 			reply->clearData(this);
 		}
 		clearDependencyMessage();
+		unarmMediaDestroy();
 		UpdateComponents(0);
 		createServiceFromMtp(message);
 		applyServiceDateEdition(message);
@@ -2658,6 +2660,11 @@ void HistoryItem::applySentMessage(const MTPDmessage &data) {
 		_flags |= MessageFlag::InvertMedia;
 	} else {
 		_flags &= ~MessageFlag::InvertMedia;
+	}
+	if (data.is_noforwards()) {
+		_flags |= MessageFlag::NoForwards;
+	} else {
+		_flags &= ~MessageFlag::NoForwards;
 	}
 
 	const auto wasTypes = sharedMediaTypes();
