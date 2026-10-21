@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import contextlib
 import datetime
 import hashlib
 import json
@@ -13,7 +14,9 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+import xml.parsers.expat
 
 
 TAG_PATTERN = re.compile(r"[a-z0-9][a-z0-9-]*")
@@ -40,6 +43,8 @@ COMMIT_HASH_PATTERN = re.compile(
 )
 LEGACY_COMMIT_FIELDS = ("Task-Base-SHA:", "Implementation-SHA:")
 PROJECT_ARCHIVE_DIR = "archive"
+BATCHES_DIR = "batches"
+FINISHED_BATCH_STATUSES = {"approved", "superseded", "split", "retired"}
 PROJECT_LINK_PATTERN = re.compile(r"\]\(\.\./\.\./(?!\.\./)")
 ARCHIVED_PROJECT_LINK_PATTERN = re.compile(r"\]\(\.\./\.\./\.\./")
 STATE_FIELD_ORDER = [
@@ -73,6 +78,8 @@ CONSOLE_COMMAND_TIMEOUT = 2.0
 WAIT_IDLE_MAX_DEFAULT = 600.0
 LSAPPINFO_ASN_PATTERN = re.compile(r"ASN:0x[0-9a-fA-F]+-0x[0-9a-fA-F]+:")
 LSAPPINFO_NAME_PATTERN = re.compile(r'"(.*)"\s+ASN:')
+LAUNCH_ACTIVATION_VARIABLE = "QT_MAC_DISABLE_FOREGROUND_APPLICATION_TRANSFORM"
+MACOS_OPEN_TOOL = "/usr/bin/open"
 BUILD_LOCK_PROCESS_NAMES = {
 	"cl.exe",
 	"cmake.exe",
@@ -89,6 +96,10 @@ BUILD_LOCK_PROCESS_NAMES = {
 
 
 class WorkspaceError(RuntimeError):
+	pass
+
+
+class RebaseConflict(WorkspaceError):
 	pass
 
 
@@ -327,6 +338,34 @@ def routing_unpublished_count(config):
 		"--left-right",
 		"--count",
 		f"master...{config['routing_branch']}",
+	).stdout.strip().split()
+	return int(counts[1])
+
+
+HEALTH_STATE = "code-health"
+
+
+def health_worktree_config(args, create=False):
+	config = repository_config(args, create=create)
+	tag = config["checkout_tag"]
+	branch = f"code-health/{tag}"
+	worktree = Path(config["worktrees_root"]) / f"{tag}-code-health"
+	linked_worktree(config, worktree, branch, create, "code-health AI worktree")
+	return {
+		**config,
+		"health_worktree": str(worktree),
+		"health_branch": branch,
+		"health_state": str(worktree / HEALTH_STATE),
+	}
+
+
+def health_unpublished_count(config):
+	counts = run_git(
+		Path(config["health_worktree"]),
+		"rev-list",
+		"--left-right",
+		"--count",
+		f"master...{config['health_branch']}",
 	).stdout.strip().split()
 	return int(counts[1])
 
@@ -825,7 +864,7 @@ def publish_worktree(config, worktree_key, branch_key, label, validate=None):
 		rebase = run_git(worktree, "rebase", "master", check=False)
 		if rebase.returncode:
 			run_git(worktree, "rebase", "--abort", check=False)
-			raise WorkspaceError(
+			raise RebaseConflict(
 				"AI state conflicts with newer master; the worktree commits were preserved. "
 				+ (rebase.stderr.strip() or rebase.stdout.strip())
 			)
@@ -1261,6 +1300,92 @@ def pending_consolidations(root):
 	return result
 
 
+def batch_relative_path(tag):
+	if not TAG_PATTERN.fullmatch(tag):
+		raise WorkspaceError(f"Invalid checkout tag: {tag!r}")
+	return f"{BATCHES_DIR}/{tag}.yaml"
+
+
+def task_record_status(root, states, task_id):
+	# The live status, the kind of retirement, or None for an unknown id.
+	if not TASK_ID_PATTERN.fullmatch(task_id):
+		return None
+	if task_id in states:
+		return states[task_id]["status"]
+	directory = root / "tasks" / task_id
+	if (directory / "superseded.yaml").is_file():
+		return "superseded"
+	if (directory / "split.yaml").is_file():
+		return "split"
+	if (directory / "task.md").is_file():
+		return "retired"
+	return None
+
+
+def batch_task_order(root, states, task_id, values):
+	# The started task leads; the rest keep their first selection position.
+	ordered = list(dict.fromkeys([task_id, *(values or [])]))
+	unknown = [
+		value for value in ordered
+		if task_record_status(root, states, value) is None
+	]
+	if unknown:
+		raise WorkspaceError("Unknown batch task ids: " + ", ".join(unknown))
+	kept = []
+	dropped = []
+	for value in ordered:
+		status = task_record_status(root, states, value)
+		if status in FINISHED_BATCH_STATUSES:
+			dropped.append({"id": value, "status": status})
+		else:
+			kept.append(value)
+	return kept, dropped
+
+
+def write_batch(root, tag, task_ids, newline):
+	relative = batch_relative_path(tag)
+	path = root / relative
+	path.parent.mkdir(exist_ok=True)
+	stamp = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
+	lines = [
+		f"checkout: {tag}",
+		f"updated: {stamp}",
+		"tasks:",
+		*(f"  - {task_id}" for task_id in task_ids),
+	]
+	path.write_bytes((newline.join(lines) + newline).encode("utf-8"))
+	return relative
+
+
+def load_batch(root, tag):
+	path = root / batch_relative_path(tag)
+	try:
+		text = path.read_text(encoding="utf-8-sig")
+	except (OSError, UnicodeDecodeError):
+		return []
+	result = []
+	listing = False
+	for line in text.splitlines():
+		stripped = line.strip()
+		if not stripped or stripped.startswith("#"):
+			continue
+		if listing and stripped.startswith("- "):
+			value = parse_scalar(stripped[2:])
+			if (
+				isinstance(value, str)
+				and TASK_ID_PATTERN.fullmatch(value)
+				and value not in result
+			):
+				result.append(value)
+		elif not line[0].isspace():
+			listing = line.split(":", 1)[0].strip() == "tasks"
+	return result
+
+
+def file_newline(path):
+	return "\r\n" if b"\r\n" in path.read_bytes() else "\n"
+
+
 def command_queue(args):
 	config = worktree_config(args, create=True)
 	main = Path(config["ai_main"])
@@ -1326,6 +1451,16 @@ def command_queue(args):
 			violations.append(f"{task['id']} is blocked but unclaimed")
 		if task["status"] == "split-required" and task["claimed_by"] is None:
 			violations.append(f"{task['id']} is split-required but unclaimed")
+	own_batch = [
+		{
+			"id": task_id,
+			"status": task_record_status(slot, states, task_id) or "missing",
+			"claimed_by": (
+				states[task_id]["claimed_by"] if task_id in states else None
+			),
+		}
+		for task_id in load_batch(slot, tag)
+	]
 	inbox_file = main / "inbox" / "inbox.md"
 	result = {
 		**config,
@@ -1333,6 +1468,7 @@ def command_queue(args):
 			inbox_file.is_file()
 			and bool(inbox_file.read_text(encoding="utf-8").strip())
 		),
+		"own_batch": own_batch,
 		"own_in_progress": own_in_progress,
 		"own_todo": own_todo,
 		"own_blocked": own_blocked,
@@ -1399,6 +1535,12 @@ def command_start(args):
 		raise WorkspaceError(
 			f"Task is not available todo work for this checkout: {args.task}"
 		)
+	batch, batch_dropped = batch_task_order(
+		slot,
+		states,
+		args.task,
+		getattr(args, "batch", None),
+	)
 	carried_from = task["carried_from"]
 	if carried_from is not None:
 		split = load_splits(slot).get(carried_from)
@@ -1452,10 +1594,16 @@ def command_start(args):
 		"lease_until": None,
 		"phase": "setup",
 	})
+	batch_path = write_batch(
+		slot,
+		config["checkout_tag"],
+		batch,
+		file_newline(path),
+	)
 	try:
 		commit = commit_paths(
 			config,
-			[str(path.relative_to(slot))],
+			[str(path.relative_to(slot)), batch_path],
 			f"Start {args.task} on {config['checkout_tag']}",
 		)
 	except WorkspaceError as error:
@@ -1485,6 +1633,8 @@ def command_start(args):
 		"task": args.task,
 		"status": "in-progress",
 		"published": bool(commit),
+		"batch": batch,
+		"batch_dropped": batch_dropped,
 	}, indent=2, sort_keys=True))
 
 
@@ -1959,16 +2109,39 @@ def resolved_exe(value):
 	return path
 
 
+def app_bundle_of(path):
+	for parent in path.parents:
+		if parent.suffix == ".app":
+			return parent
+	return None
+
+
 def portable_root_for(exe, override):
 	if override:
 		root = Path(override).expanduser().resolve()
 		if not root.is_dir():
 			raise WorkspaceError(f"Portable root does not exist: {root}")
 		return root
-	for parent in exe.parents:
-		if parent.suffix == ".app":
-			return parent.parent
-	return exe.parent
+	bundle = app_bundle_of(exe)
+	return bundle.parent if bundle is not None else exe.parent
+
+
+def background_launch_bundle(exe, platform=None):
+	platform = sys.platform if platform is None else platform
+	bundle = app_bundle_of(exe)
+	if (
+		platform != "darwin"
+		or bundle is None
+		or exe.parent != bundle / "Contents" / "MacOS"
+	):
+		return None
+	try:
+		info = plistlib.loads((bundle / "Contents" / "Info.plist").read_bytes())
+	except (OSError, ValueError, xml.parsers.expat.ExpatError):
+		return None
+	if isinstance(info, dict) and info.get("CFBundleExecutable") == exe.name:
+		return bundle
+	return None
 
 
 def unique_destination(directory, name):
@@ -2123,6 +2296,27 @@ def kill_processes_with_executable(exe):
 		except (OSError, subprocess.SubprocessError):
 			continue
 	return killed
+
+
+@contextlib.contextmanager
+def executable_killed_on_abort(exe):
+	replaced = {}
+	if threading.current_thread() is threading.main_thread():
+		for name in ("SIGTERM", "SIGHUP"):
+			number = getattr(signal, name, None)
+			if number is not None and signal.getsignal(number) == signal.SIG_DFL:
+				replaced[number] = signal.signal(
+					number, lambda signum, frame: sys.exit(128 + signum)
+				)
+	try:
+		yield
+	except BaseException:
+		# a background client is not test-run's child: a group or tree kill of test-run misses it
+		kill_processes_with_executable(exe)
+		raise
+	finally:
+		for number, previous in replaced.items():
+			signal.signal(number, previous)
 
 
 def windows_process_records():
@@ -2683,6 +2877,12 @@ def wait_for_console_idle(required, bound, clock=time.monotonic, sleep=time.slee
 
 
 def command_test_run(args):
+	extra_environment = parse_env_values(args.env)
+	if LAUNCH_ACTIVATION_VARIABLE in extra_environment:
+		raise WorkspaceError(
+			f"--env cannot set {LAUNCH_ACTIVATION_VARIABLE}: test-run sets it to "
+			"launch the client without activating it, and --activate removes it"
+		)
 	if args.wait_idle is not None:
 		if not 0 < args.wait_idle < float("inf"):
 			raise WorkspaceError("--wait-idle must be a positive number of seconds")
@@ -2709,7 +2909,11 @@ def command_test_run(args):
 
 	environment = os.environ.copy()
 	environment["TDESKTOP_TEST_EVIDENCE_DIR"] = str(run_dir)
-	environment.update(parse_env_values(args.env))
+	if args.activate:
+		environment.pop(LAUNCH_ACTIVATION_VARIABLE, None)
+	else:
+		environment[LAUNCH_ACTIVATION_VARIABLE] = "1"
+	environment.update(extra_environment)
 
 	cleared = (
 		clear_stale_crash_state(
@@ -2729,13 +2933,31 @@ def command_test_run(args):
 	working_before = working.stat().st_mtime_ns if working.is_file() else None
 
 	workdir = (portable / PORTABLE_LIVE) if args.portable_root else None
-	launch = [str(exe), "-testagent", "-noupdate"]
+	launch_args = ["-testagent", "-noupdate"]
 	if workdir is not None:
-		launch += ["-workdir", str(workdir)]
+		launch_args += ["-workdir", str(workdir)]
+	bundle = None if args.activate else background_launch_bundle(exe)
+	if bundle is None:
+		launch = [str(exe), *launch_args]
+	else:
+		# AppKit's launch event activates an exec'd client, not one launched by open -g
+		stdout_path.write_bytes(b"")
+		stderr_path.write_bytes(b"")
+		launch = [
+			MACOS_OPEN_TOOL, "-g", "-n", "-W", "-a", str(bundle),
+			"--stdout", str(stdout_path), "--stderr", str(stderr_path),
+			"--args", *launch_args,
+		]
 
 	_, input_before = console_input_reading()
 	launched_at = time.time()
-	with stdout_path.open("wb") as out, stderr_path.open("wb") as err:
+	with executable_killed_on_abort(exe), contextlib.ExitStack() as streams:
+		if bundle is None:
+			out = streams.enter_context(stdout_path.open("wb"))
+			err = streams.enter_context(stderr_path.open("wb"))
+		else:
+			out = streams.enter_context((run_dir / "launcher_output.txt").open("wb"))
+			err = subprocess.STDOUT
 		process = subprocess.Popen(
 			launch,
 			stdout=out,
@@ -2779,8 +3001,12 @@ def command_test_run(args):
 				outcome = "quiet-killed"
 				break
 		process.wait()
-	ended_at = time.time()
-	kill_processes_with_executable(exe)
+		ended_at = time.time()
+		stragglers_after = kill_processes_with_executable(exe)
+	launcher_exit_code = None
+	if bundle is not None:
+		# open -W exits 0 whatever the client's status, so only open's own is known
+		launcher_exit_code, exit_code = exit_code, None
 
 	log_text = (
 		log_path.read_text(encoding="utf-8", errors="replace")
@@ -2849,6 +3075,9 @@ def command_test_run(args):
 		"input_after": input_after,
 		"input_before": input_before,
 		"input_during_run": input_during_run,
+		"launch_activation": "allowed" if args.activate else "suppressed",
+		"launch_method": "exec" if bundle is None else "background",
+		"launcher_exit_code": launcher_exit_code,
 		"log_path": str(log_path) if log_path.is_file() else None,
 		"markers": parse_test_log(log_text),
 		"outcome": outcome,
@@ -2857,6 +3086,7 @@ def command_test_run(args):
 		"stale_crash_cleared": cleared,
 		"stderr_tail": tail_of_file(stderr_path),
 		"stragglers_killed": stragglers,
+		"stragglers_killed_after": stragglers_after,
 		"test_complete": test_complete,
 		"verdict_hint": verdict_hint,
 		"wait_idle": wait_idle,
@@ -4918,6 +5148,73 @@ def command_route_publish(args):
 	}, indent=2, sort_keys=True))
 
 
+def command_health_ensure(args):
+	config = health_worktree_config(args, create=True)
+	worktree = Path(config["health_worktree"])
+	dirty = changed_paths(worktree)
+	unpublished = health_unpublished_count(config)
+	if not dirty and not unpublished:
+		update_main_from_origin(config)
+		sync_branch_worktree(
+			config,
+			"health_worktree",
+			"health_branch",
+			"ai-tdesktop code-health worktree",
+		)
+	print(json.dumps({
+		**config,
+		"health_dirty": dirty,
+		"health_unpublished": unpublished,
+	}, indent=2, sort_keys=True))
+
+
+def command_health_publish(args):
+	config = health_worktree_config(args, create=True)
+	worktree = Path(config["health_worktree"])
+	changes = changed_paths(worktree)
+	outside = [path for path in changes if not path_is_covered(path, [HEALTH_STATE])]
+	if outside:
+		raise WorkspaceError(
+			"Code-health worktree changes outside code-health/: "
+			+ ", ".join(outside)
+		)
+	committed = bool(changes)
+	if committed:
+		if not args.message:
+			raise WorkspaceError("A commit message is required when changes exist")
+		run_git(worktree, "add", "-A", "--", HEALTH_STATE)
+		run_git(worktree, "commit", "-m", args.message)
+	elif not health_unpublished_count(config):
+		raise WorkspaceError("The code-health worktree has nothing to publish")
+	result = {
+		"committed": committed,
+		"health_branch": config["health_branch"],
+		"health_worktree": config["health_worktree"],
+	}
+	try:
+		publish_worktree(
+			config,
+			"health_worktree",
+			"health_branch",
+			"ai-tdesktop code-health worktree",
+		)
+	except RebaseConflict:
+		if not args.drop_on_conflict:
+			raise
+		run_git(worktree, "reset", "--hard", "master")
+		print(json.dumps({
+			**result,
+			"published": False,
+			"dropped": True,
+		}, indent=2, sort_keys=True))
+		return
+	print(json.dumps({
+		**result,
+		"published": True,
+		"dropped": False,
+	}, indent=2, sort_keys=True))
+
+
 def command_inbox_ensure(args):
 	config = inbox_worktree_config(args, create=True)
 	print(json.dumps(config, indent=2, sort_keys=True))
@@ -5114,6 +5411,7 @@ def parse_args():
 	add_common_arguments(start)
 	start.add_argument("--task", required=True)
 	start.add_argument("--require", action="append", default=[])
+	start.add_argument("--batch", action="extend", nargs="+", metavar="ID")
 	start.set_defaults(handler=command_start)
 
 	source_lineage = subparsers.add_parser("source-lineage")
@@ -5199,6 +5497,7 @@ def parse_args():
 	test_run.add_argument("--grace", type=float, default=15.0)
 	test_run.add_argument("--wait-idle", type=float)
 	test_run.add_argument("--wait-idle-max", type=float, default=WAIT_IDLE_MAX_DEFAULT)
+	test_run.add_argument("--activate", action="store_true")
 	test_run.add_argument("--env", action="append")
 	test_run.set_defaults(handler=command_test_run)
 
@@ -5263,6 +5562,16 @@ def parse_args():
 		dest="paths",
 	)
 	route_publish.set_defaults(handler=command_route_publish)
+
+	health_ensure = subparsers.add_parser("health-ensure")
+	add_common_arguments(health_ensure)
+	health_ensure.set_defaults(handler=command_health_ensure)
+
+	health_publish = subparsers.add_parser("health-publish")
+	add_common_arguments(health_publish)
+	health_publish.add_argument("--message")
+	health_publish.add_argument("--drop-on-conflict", action="store_true")
+	health_publish.set_defaults(handler=command_health_publish)
 
 	consolidate_publish = subparsers.add_parser("consolidate-publish")
 	add_common_arguments(consolidate_publish)
