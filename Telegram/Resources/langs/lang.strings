@@ -1994,6 +1994,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_media_song_empty_search" = "No music files found";
 "lng_media_file_empty_search" = "No files found";
 "lng_media_link_empty_search" = "No shared links found";
+"lng_media_audio_empty_search" = "No voice messages found";
 
 "lng_manage_group_title" = "Manage group";
 "lng_manage_channel_title" = "Manage Channel";
@@ -8073,6 +8074,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 "lng_photo_editor_audio_remove" = "Remove Audio";
 "lng_photo_editor_trim_shortest" = "Trim to shortest";
+
+"lng_video_editor_gif_too_large" = "Videos larger than {size} can't be converted to a GIF";
 
 "lng_photo_editor_keys_tooltip" = "Keyboard shortcuts";
 "lng_photo_editor_keys_gesture" = "{modifier}-{gesture}";
