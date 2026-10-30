@@ -10,6 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/timer.h"
 #include "ui/rp_widget.h"
 #include "ui/effects/animations.h"
+#include "ui/effects/message_sending_history.h"
 #include "ui/effects/thanos_effect_controller.h"
 #include "ui/dragging_scroll_manager.h"
 #include "ui/widgets/middle_click_autoscroll.h"
@@ -42,6 +43,7 @@ struct ChatPaintContextArgs;
 enum class TouchScrollState;
 struct PeerUserpicView;
 class MessageSendingAnimationController;
+struct MessageSendingReveal;
 } // namespace Ui
 
 namespace Dialogs::Ui {
@@ -137,6 +139,8 @@ public:
 		not_null<HistoryItem*> first,
 		not_null<HistoryItem*> second) = 0;
 	virtual void listSelectionChanged(SelectedItems &&items) = 0;
+	virtual void listTextSelectionUpdated() {
+	}
 	virtual void listMarkReadTill(not_null<HistoryItem*> item) = 0;
 	virtual void listItemsAddedToEnd(
 		const std::vector<not_null<Element*>> &,
@@ -346,6 +350,8 @@ public:
 	void restoreScrollPosition();
 
 	void resizeToWidth(int newWidth, int minHeight);
+	void shiftScrollBaseline(int delta);
+	void liftItemReveal(not_null<HistoryItem*> item, int lift);
 
 	void saveState(not_null<ListMemento*> memento);
 	void restoreState(not_null<ListMemento*> memento);
@@ -377,7 +383,9 @@ public:
 	[[nodiscard]] MessageSelection getSelectedTextSelection(
 		not_null<HistoryItem*> item) const;
 	void clearSelected();
+	void clearTextSelection();
 	void cancelSelection();
+	[[nodiscard]] bool wasSelectedText() const;
 	void selectItem(not_null<HistoryItem*> item);
 	void selectItemAsGroup(not_null<HistoryItem*> item);
 	void selectItemsUpTo(not_null<HistoryItem*> item);
@@ -659,10 +667,6 @@ private:
 			return !(*this == other);
 		}
 	};
-	struct ItemRevealAnimation {
-		Ui::Animations::Simple animation;
-		int startHeight = 0;
-	};
 	enum class Direction {
 		Up,
 		Down,
@@ -693,6 +697,11 @@ private:
 	void onTouchScrollTimer();
 	void markReadMetricsStale();
 	void registerReadMetricsActivity();
+
+	struct FirstContentHold;
+	void applyViewerSlice(Data::MessagesSlice &&slice);
+	void checkFirstContentHold(not_null<FirstContentHold*> hold);
+	void scheduleFirstContentRelease(not_null<FirstContentHold*> hold);
 
 	void updateAroundPositionFromNearest(int nearestIndex);
 	void refreshRows(const Data::MessagesSlice &old);
@@ -803,7 +812,6 @@ private:
 	[[nodiscard]] HistorySelectedTextParts getSelectedTextParts() const;
 	SelectionModeResult inSelectionMode() const;
 	bool overSelectedItems() const;
-	void clearTextSelection();
 	void setTextSelection(
 		not_null<Element*> view,
 		MessageSelection selection);
@@ -885,7 +893,9 @@ private:
 	void revealItemsCallback();
 	void maybeMarkReactionsRead(not_null<HistoryItem*> item);
 
-	void startMessageSendingAnimation(not_null<HistoryItem*> item);
+	std::optional<Ui::MessageSendingReveal> startMessageSendingAnimation(
+		not_null<HistoryItem*> item,
+		bool textFlightOnly = false);
 	void showPremiumStickerTooltip(
 		not_null<const HistoryView::Element*> view);
 
@@ -960,8 +970,10 @@ private:
 	base::flat_set<not_null<Element*>> _itemRevealPending;
 	base::flat_map<
 		not_null<Element*>,
-		ItemRevealAnimation> _itemRevealAnimations;
+		Ui::ItemRevealAnimation> _itemRevealAnimations;
+	Ui::ItemRevealLift _itemRevealLift;
 	int _itemsRevealHeight = 0;
+	rpl::event_stream<> _itemsRevealHeightChanges;
 	base::flat_set<not_null<const HistoryItem*>> _animatedStickersPlayed;
 	base::flat_map<not_null<PeerData*>, Ui::PeerUserpicView> _userpics;
 	base::flat_map<not_null<PeerData*>, Ui::PeerUserpicView> _userpicsCache;
@@ -1044,6 +1056,7 @@ private:
 
 	bool _isChatWide = false;
 	bool _refreshingViewer = false;
+	bool _firstContentShown = false;
 	bool _showFinished = false;
 	bool _resizePending = false;
 	std::optional<ElementChatMode> _overrideChatMode;
@@ -1108,6 +1121,7 @@ private:
 	void setupThanosEffect();
 	std::unique_ptr<Ui::ThanosEffectController> _thanosController;
 
+	crl::time _firstContentDeadline = 0;
 	rpl::lifetime _viewerLifetime;
 
 };
@@ -1124,5 +1138,9 @@ void ConfirmSendNowSelectedItems(not_null<ListWidget*> widget);
 	not_null<HistoryItem*> item);
 [[nodiscard]] CopyRestrictionType SelectRestrictionTypeFor(
 	not_null<PeerData*> peer);
+
+inline constexpr auto kFirstRevealTimeout = crl::time(300);
+
+[[nodiscard]] PeerData *FirstRevealWaitPeer(not_null<HistoryItem*> item);
 
 } // namespace HistoryView

@@ -521,7 +521,7 @@ if customRunCommand:
 stage('patches', """
     git clone https://github.com/desktop-app/patches.git
     cd patches
-    git checkout 845a383f7abe8e44f92dfdcd566d603066ec2696
+    git checkout 53e633d8c5455f3ced2cc88c1aa83ed6f64a534f
 mac:
     sed -i '' "s/10.13/$MACOSX_DEPLOYMENT_TARGET/g" macos_meson_*.txt
     git clone https://github.com/desktop-app/qt6_highsierra_patches.git qt6_highsierra
@@ -1611,6 +1611,7 @@ if qt < '6':
     cd qt_$QT
     git submodule update --init --recursive --progress qtbase qtimageformats qtsvg
 depends:patches/qtbase_""" + qt + """/*.patch
+depends:patches/qtsvg_""" + qt + """/*.patch
 win:
     cd qtbase
     setlocal enabledelayedexpansion
@@ -1621,6 +1622,8 @@ win:
             exit /b 1
         )
     )
+    cd ..\\qtsvg
+    for %%i in (..\\..\\patches\\qtsvg_%QT%\\*) do git apply %%i -v || exit /b 1
     cd ..
 
     SET CONFIGURATIONS=-debug
@@ -1833,7 +1836,7 @@ win:
 stage('tg_owt', """
     git clone https://github.com/desktop-app/tg_owt.git
     cd tg_owt
-    git checkout 07fb35bc33b3e79125a1beab7690e830f183f5d8
+    git checkout 49ceed3985d8626b3a24bdb14d9c593a115cc6e8
     git submodule update --init --recursive
 win:
     SET MOZJPEG_PATH=$LIBS_DIR/mozjpeg

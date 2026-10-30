@@ -161,7 +161,7 @@ RUN <<EOF
 git init patches
 cd patches
 git remote add origin https://github.com/desktop-app/patches.git
-git fetch --depth=1 origin 845a383f7abe8e44f92dfdcd566d603066ec2696
+git fetch --depth=1 origin 53e633d8c5455f3ced2cc88c1aa83ed6f64a534f
 git reset --hard FETCH_HEAD
 rm -rf .git
 EOF
@@ -953,7 +953,7 @@ RUN --mount=type=cache,target=/var/cache/ccache <<EOF
 git init tg_owt
 cd tg_owt
 git remote add origin https://github.com/desktop-app/tg_owt.git
-git fetch --depth=1 origin 07fb35bc33b3e79125a1beab7690e830f183f5d8
+git fetch --depth=1 origin 49ceed3985d8626b3a24bdb14d9c593a115cc6e8
 git reset --hard FETCH_HEAD
 git submodule update --init --recursive --depth=1
 cmake -B build . -DTG_OWT_DLOPEN_PIPEWIRE=ON
