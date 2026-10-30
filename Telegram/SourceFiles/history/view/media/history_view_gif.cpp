@@ -212,7 +212,6 @@ Gif::Gif(
 		const auto fullId = _realParent->fullId();
 		const auto &data = &_parent->data()->history()->owner();
 		const auto isOut = _parent->data()->out();
-		_parent->data()->removeFromSharedMediaIndex();
 		setDocumentLinks(_data, realParent, [=] {
 			auto lifetime = std::make_shared<rpl::lifetime>();
 			TTLVoiceStops(fullId) | rpl::on_next([=]() mutable {
@@ -1102,7 +1101,10 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 			auto fastShareTop = fullBottom
 				- st::historyFastShareBottom
 				- (size ? size->height() : 0);
-			if (fastShareLeft + rightActionWidth > maxRight) {
+			const auto fitRight = _parent->hasFromPhoto()
+				? maxRight
+				: _parent->width();
+			if (fastShareLeft + rightActionWidth > fitRight) {
 				const auto hidesBottomInfo = _parent->hidesBottomInfo();
 				fastShareLeft = fullRight
 					- rightActionWidth
@@ -1591,7 +1593,10 @@ TextState Gif::textState(QPoint point, StateRequest request) const {
 			auto fastShareTop = fullBottom
 				- st::historyFastShareBottom
 				- size->height();
-			if (fastShareLeft + rightActionWidth > maxRight) {
+			const auto fitRight = _parent->hasFromPhoto()
+				? maxRight
+				: _parent->width();
+			if (fastShareLeft + rightActionWidth > fitRight) {
 				const auto hidesBottomInfo = _parent->hidesBottomInfo();
 				fastShareLeft = fullRight
 					- rightActionWidth

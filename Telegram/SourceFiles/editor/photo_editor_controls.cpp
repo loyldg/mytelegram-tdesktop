@@ -956,6 +956,9 @@ PhotoEditorControls::PhotoEditorControls(
 					selected ? check : nullptr);
 			};
 			add(
+				tr::lng_photo_editor_corners_circle(tr::now),
+				RoundedCornersLevel::Circle);
+			add(
 				tr::lng_photo_editor_corners_large(tr::now),
 				RoundedCornersLevel::Large);
 			add(
@@ -1376,7 +1379,9 @@ void PhotoEditorControls::updateTimelineGeometry(
 
 bool PhotoEditorControls::handleKeyPress(not_null<QKeyEvent*> e) const {
 	if ((e->key() == Qt::Key_Question) || (e->text() == u"?"_q)) {
-		_keysLegend->toggle();
+		if (!e->isAutoRepeat()) {
+			_keysLegend->toggle();
+		}
 		return true;
 	}
 	_keyPresses.fire(std::move(e));

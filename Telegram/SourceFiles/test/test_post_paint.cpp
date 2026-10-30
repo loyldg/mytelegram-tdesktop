@@ -17,6 +17,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "test/test_capture.h"
 #include "test/test_log.h"
 #include "test/test_runner.h"
+#include "test/test_window_exposure.h"
 #include "ui/rp_widget.h"
 #include "ui/ui_utility.h"
 #include "window/window_controller.h"
@@ -49,25 +50,80 @@ constexpr auto kGrabFreeLead = crl::time(40);
 	return false;
 }
 
+[[nodiscard]] QString ReceiptKindText(PostPaintReceiptKind kind) {
+	switch (kind) {
+	case PostPaintReceiptKind::Product: return u"product"_q;
+	case PostPaintReceiptKind::Untracked: return u"untracked"_q;
+	case PostPaintReceiptKind::Capture: return u"capture"_q;
+	}
+	Unexpected("Kind in Test::ReceiptKindText.");
+}
+
 } // namespace
 
 QString PostPaintSampleText(const PostPaintSample &sample) {
+	return PostPaintSampleText(sample, HelperNumberFormat());
+}
+
+QString PostPaintSampleText(
+		const PostPaintSample &sample,
+		NumberFormat format) {
 	return u"kind=post seq=%1 paint=%2 last=%3 covered=%4 lo=%5 hi=%6"_q
-		.arg(sample.seq)
-		.arg(sample.paintAt)
-		.arg(sample.lastPaintAt)
-		.arg(sample.covered)
-		.arg(sample.lo)
-		.arg(sample.hi);
+		.arg(HelperNumber(sample.seq, format))
+		.arg(HelperNumber(sample.paintAt, format))
+		.arg(HelperNumber(sample.lastPaintAt, format))
+		.arg(HelperNumber(sample.covered, format))
+		.arg(HelperNumber(sample.lo, format))
+		.arg(HelperNumber(sample.hi, format));
+}
+
+QString PostPaintStopText(
+		const QString &name,
+		const PostPaintStop &stop,
+		NumberFormat format) {
+	auto text
+		= u"%1: kind=stop reason=%2 seq=%3 pending=%4 samples=%5 paints=%6 "
+		"ignored=%7 dropped=%8"_q
+			.arg(name)
+			.arg(stop.reason);
+	const auto values = {
+		stop.seq,
+		stop.pending ? 1 : 0,
+		stop.samples,
+		stop.paints,
+		stop.ignored,
+		stop.dropped,
+	};
+	for (const auto value : values) {
+		text = ArgNumber(text, value, format);
+	}
+	return text;
+}
+
+QString PostPaintReceiptText(const PostPaintReceipt &receipt) {
+	return u"receipt index=%1 at=%2 kind=%3"_q
+		.arg(receipt.index)
+		.arg(receipt.at)
+		.arg(ReceiptKindText(receipt.kind));
+}
+
+bool PostPaintFirstReceipt::received() const {
+	return refusal.isEmpty() && (receipt.index > 0);
+}
+
+bool PostPaintCaptureScope::capturing() const {
+	return (_depth > 0);
 }
 
 PostPaintSampler::PostPaintSampler(
 	QString name,
 	not_null<QWidget*> owner,
-	Fn<void(int seq)> sample)
+	Fn<void(int seq)> sample,
+	std::shared_ptr<PostPaintCaptureScope> scope)
 : _name(std::move(name))
 , _owner(owner.get())
-, _sample(std::move(sample)) {
+, _sample(std::move(sample))
+, _scope(std::move(scope)) {
 	const auto filter = base::install_event_filter(owner, [=](
 			not_null<QEvent*> e) {
 		if (e->type() == QEvent::Paint) {
@@ -101,15 +157,18 @@ void PostPaintSampler::paintReceived() {
 	if (!_stopReason.isEmpty()) {
 		return;
 	}
-	if (_sampling) {
+	const auto now = crl::now();
+	if (_sampling || (_scope && _scope->capturing())) {
 		++_ignored;
+		receive(now, PostPaintReceiptKind::Capture);
 		return;
 	}
-	const auto now = crl::now();
 	++_paints;
 	if (!sampling(now) || grabFree(now)) {
+		receive(now, PostPaintReceiptKind::Untracked);
 		return;
 	}
+	receive(now, PostPaintReceiptKind::Product);
 	if (_pending) {
 		++_pendingCovered;
 		_pendingLastAt = now;
@@ -120,6 +179,14 @@ void PostPaintSampler::paintReceived() {
 	_pendingFirstAt = now;
 	_pendingLastAt = now;
 	post();
+}
+
+void PostPaintSampler::receive(crl::time at, PostPaintReceiptKind kind) {
+	_receipts.push_back({
+		.index = int(_receipts.size()) + 1,
+		.at = at,
+		.kind = kind,
+	});
 }
 
 void PostPaintSampler::post() {
@@ -151,7 +218,18 @@ void PostPaintSampler::runPending() {
 	const auto weak = base::make_weak(this);
 	_sampling = true;
 	row.lo = crl::now();
-	_sample(row.seq);
+	{
+		const auto scope = _scope;
+		if (scope) {
+			++scope->_depth;
+		}
+		const auto leave = gsl::finally([&] {
+			if (scope) {
+				--scope->_depth;
+			}
+		});
+		_sample(row.seq);
+	}
 	row.hi = crl::now();
 	if (!weak) {
 		return;
@@ -168,16 +246,18 @@ void PostPaintSampler::finish(const QString &reason) {
 	}
 	_stopReason = reason;
 	const auto pending = base::take(_pending);
-	Note(u"%1: kind=stop reason=%2 seq=%3 pending=%4 samples=%5 paints=%6 "
-		"ignored=%7 dropped=%8"_q
-			.arg(_name)
-			.arg(_stopReason)
-			.arg(_samples.empty() ? 0 : _samples.back().seq)
-			.arg(pending ? 1 : 0)
-			.arg(int(_samples.size()))
-			.arg(_paints)
-			.arg(_ignored)
-			.arg(_dropped));
+	Note(PostPaintStopText(
+		_name,
+		{
+			.reason = _stopReason,
+			.seq = _samples.empty() ? 0 : _samples.back().seq,
+			.pending = pending,
+			.samples = int(_samples.size()),
+			.paints = _paints,
+			.ignored = _ignored,
+			.dropped = _dropped,
+		},
+		HelperNumberFormat()));
 }
 
 bool PostPaintSampler::sampling(crl::time now) const {
@@ -207,6 +287,43 @@ std::vector<PostPaintSample> PostPaintSampler::samplesSince(int mark) const {
 	return result;
 }
 
+int PostPaintSampler::receiptMark() const {
+	return int(_receipts.size());
+}
+
+std::vector<PostPaintReceipt> PostPaintSampler::receiptsSince(
+		int mark) const {
+	auto result = std::vector<PostPaintReceipt>();
+	for (const auto &receipt : _receipts) {
+		if (receipt.index > mark) {
+			result.push_back(receipt);
+		}
+	}
+	return result;
+}
+
+PostPaintFirstReceipt PostPaintSampler::firstReceiptSince(
+		int mark,
+		PostPaintReceiptKind kind) const {
+	for (const auto &receipt : _receipts) {
+		if ((receipt.index > mark) && (receipt.kind == kind)) {
+			return { .receipt = receipt };
+		}
+	}
+	const auto last = _receipts.empty()
+		? u"none"_q
+		: PostPaintReceiptText(_receipts.back());
+	return {
+		.refusal = u"absent-receipt: no %1 receipt since mark %2 "
+			"(receipts=%3, last=%4, stop=%5)"_q
+			.arg(ReceiptKindText(kind))
+			.arg(mark)
+			.arg(int(_receipts.size()))
+			.arg(last)
+			.arg(_stopReason.isEmpty() ? u"-"_q : _stopReason),
+	};
+}
+
 bool PostPaintSampler::pending() const {
 	return _pending;
 }
@@ -228,7 +345,10 @@ QString PostPaintSampler::details() const {
 			.arg(_dropped)
 			.arg(int(_windows.size()))
 			.arg(int(_grabFree.size()))
-			.arg(_longest);
+			.arg(_longest)
+		+ u" scope=%1 receipts=%2"_q
+			.arg(_scope ? u"shared"_q : u"local"_q)
+			.arg(int(_receipts.size()));
 }
 
 namespace {
@@ -1088,6 +1208,7 @@ void AppendPostPaintSamplerSelfTest(not_null<Runner*> runner) {
 		int paintMark = 0;
 		int sampleMark = 0;
 		DestroyReading atDestroy;
+		WindowExposure exposure;
 		bool destroyPosted = false;
 	};
 	const auto state = std::make_shared<State>();
@@ -1098,6 +1219,7 @@ void AppendPostPaintSamplerSelfTest(not_null<Runner*> runner) {
 	// The sampler goes before the widget: its destructor removes its filter
 	// from the owner while the owner still lives.
 	runner->onFinish([=] {
+		RestoreWindowExposure(state->exposure);
 		state->control.cancel();
 		state->sampler = nullptr;
 		state->fixture.widget = nullptr;
@@ -1140,6 +1262,7 @@ void AppendPostPaintSamplerSelfTest(not_null<Runner*> runner) {
 			}
 			const auto fixture = &state->fixture;
 			const auto widget = fixture->widget.get();
+			state->exposure = KeepWindowExposed(widget);
 			state->sampler = std::make_unique<PostPaintSampler>(
 				u"post-paint self-test"_q,
 				widget,
@@ -1157,7 +1280,12 @@ void AppendPostPaintSamplerSelfTest(not_null<Runner*> runner) {
 		},
 		.then = [=] {
 			const auto reading = ReadFixtureGate(state->fixture, state->from);
-			Check(reading.ok, gate, reading.details);
+			Check(
+				reading.ok,
+				gate,
+				reading.details
+					+ u" | "_q
+					+ WindowExposureText(state->exposure));
 			if (reading.ok) {
 				return;
 			}
@@ -1165,6 +1293,7 @@ void AppendPostPaintSamplerSelfTest(not_null<Runner*> runner) {
 				state->fixtureGate = gate;
 			}
 			state->fixture.continuous = false;
+			RestoreWindowExposure(state->exposure);
 			state->sampler = nullptr;
 			state->fixture.widget = nullptr;
 		},
@@ -1410,6 +1539,7 @@ void AppendPostPaintSamplerSelfTest(not_null<Runner*> runner) {
 					.arg(reason)
 					.arg(state->fixture.widget ? u"alive"_q : u"released"_q)
 					.arg(state->fixture.nullImages));
+			RestoreWindowExposure(state->exposure);
 		},
 	});
 }

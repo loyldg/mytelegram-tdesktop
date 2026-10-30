@@ -19,6 +19,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_report.h"
 #include "window/section_widget.h"
 #include "window/window_session_controller.h"
+#include "history/view/controls/history_view_bot_menu_button.h"
+#include "ui/effects/message_sending_history.h"
 #include "ui/widgets/fields/input_field.h"
 #include "mtproto/sender.h"
 
@@ -89,6 +91,7 @@ class ChooseThemeController;
 class ElasticScroll;
 struct ChatPaintHighlight;
 class ChatStyle;
+struct MessageSendingReveal;
 template <typename Widget>
 class SlideWrap;
 } // namespace Ui
@@ -384,10 +387,6 @@ private:
 		Fn<void(std::vector<MsgId>)> callback;
 		bool active = false;
 	};
-	struct ItemRevealAnimation {
-		Ui::Animations::Simple animation;
-		int startHeight = 0;
-	};
 	enum class TextUpdateEvent {
 		SaveDraft = (1 << 0),
 		SendTyping = (1 << 1),
@@ -490,7 +489,6 @@ private:
 	void setMembersShowAreaActive(bool active);
 	void handleHistoryChange(not_null<const History*> history);
 	void showAboutTopPromotion();
-	void hideFieldIfVisible();
 	void unreadCountUpdated();
 	void closeCurrent();
 
@@ -609,7 +607,6 @@ private:
 	// Request to show results in the emoji panel.
 	void applyInlineBotQuery(UserData *bot, const QString &query);
 
-	void cancelReplyAfterMediaSend(bool lastKeyboardUsed);
 	[[nodiscard]] HistoryItem *lookupReplyNavItem(FullMsgId itemId) const;
 	bool replyToPreviousMessage();
 	bool replyToNextMessage();
@@ -692,11 +689,18 @@ private:
 	void updateSendRestriction();
 	[[nodiscard]] Data::SendError computeSendRestriction() const;
 	void updateHistoryGeometry(bool initial = false, bool loadedDown = false, const ScrollChange &change = { ScrollChangeNone, 0 });
+	struct ListRevealHold;
+	[[nodiscard]] bool holdListReveal();
+	void scheduleListReveal(not_null<ListRevealHold*> hold);
+	void finishListReveal(not_null<ListRevealHold*> hold);
+	void resumeListReveal();
 	void updateListSize();
 	void startItemRevealAnimations();
 	void revealItemsCallback();
+	void liftItemReveal(not_null<HistoryItem*> item, int lift);
 
-	void startMessageSendingAnimation(not_null<HistoryItem*> item);
+	std::optional<Ui::MessageSendingReveal> startMessageSendingAnimation(
+		not_null<HistoryItem*> item);
 
 	// Does any of the shown histories has this flag set.
 	bool hasPendingResizedItems() const;
@@ -883,9 +887,10 @@ private:
 	object_ptr<HistoryView::TopBarWidget> _topBar;
 	object_ptr<Ui::ElasticScroll> _scroll;
 	QPointer<HistoryInner> _list;
+	base::weak_ptr<ListRevealHold> _listRevealHold;
 	History *_migrated = nullptr;
 	History *_history = nullptr;
-	mutable Data::ForumTopic *_creatingBotTopic = nullptr;
+	mutable base::weak_ptr<Data::ForumTopic> _creatingBotTopic;
 	rpl::lifetime _historySponsoredPreloading;
 
 	// Initial updateHistoryGeometry() was called.
@@ -935,11 +940,8 @@ private:
 	QPointer<Ui::IconButton> _directMessage;
 	rpl::lifetime _directMessageLifetime;
 	object_ptr<Ui::FlatButton> _reportMessages;
-	struct {
-		object_ptr<Ui::RoundButton> button = { nullptr };
-		QString text;
-		bool small = false;
-	} _botMenu;
+	std::unique_ptr<HistoryView::BotMenuButton> _botMenu;
+	PeerId _botMenuPeer = 0;
 	object_ptr<Ui::IconButton> _attachToggle;
 	object_ptr<Ui::IconButton> _replaceMedia = { nullptr };
 	object_ptr<Ui::SendAsButton> _sendAs = { nullptr };
@@ -1024,8 +1026,9 @@ private:
 	base::flat_set<not_null<HistoryItem*>> _itemRevealPending;
 	base::flat_map<
 		not_null<HistoryItem*>,
-		ItemRevealAnimation> _itemRevealAnimations;
+		Ui::ItemRevealAnimation> _itemRevealAnimations;
 	int _itemsRevealHeight = 0;
+	rpl::event_stream<> _itemsRevealHeightChanges;
 
 
 	bool _sponsoredMessagesStateKnown = false;
@@ -1040,5 +1043,7 @@ private:
 	SendPaymentHelper _sendPayment;
 
 	rpl::event_stream<> _cancelRequests;
+	// Last, so the handler ends before any members it uses are destroyed.
+	rpl::lifetime _recordingStateLifetime;
 
 };
